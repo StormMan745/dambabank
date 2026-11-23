@@ -10,10 +10,10 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Дамбабанк">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=add-people">
   <script src="install.js" defer></script>
   <script src="schedule.js" defer></script>
-  <script src="app.js" defer></script>
+  <script src="app.js?v=add-people" defer></script>
   <title>Дамбабанк — счётчик выплат от мамы</title>
 </head>
 <body>
@@ -33,6 +33,20 @@
         <button type="button" class="install-button" id="install-app" hidden>Установить</button>
       </div>
     </div>
+    <section class="people-panel" aria-labelledby="people-title">
+      <div class="people-heading">
+        <h2 id="people-title">Для кого считаем</h2>
+        <div class="people-actions">
+          <button class="rename-button" id="rename-person" type="button" disabled>Изменить имя</button>
+          <button class="install-button" id="add-person" type="button" disabled>Добавить человека</button>
+        </div>
+      </div>
+      <div class="people-switcher" id="people-list" role="group" aria-label="Выбор человека">
+        <button class="person-button" type="button" data-person="person-1" aria-pressed="true" disabled>Человек 1</button>
+        <button class="person-button" type="button" data-person="person-2" aria-pressed="false" disabled>Человек 2</button>
+      </div>
+      <p class="people-note">У каждого свои отметки переводов и итоги. Выберите человека перед расчётом.</p>
+    </section>
     <div class="summary-grid">
       <section class="plan-card" aria-labelledby="plan-title">
         <div class="plan-content">
@@ -93,6 +107,18 @@
     </div>
   </main>
   <footer class="shell site-footer">Работает без интернета. Отметки сохраняются в этом браузере.</footer>
+  <dialog class="install-guide person-dialog" id="person-dialog" aria-labelledby="person-dialog-title">
+    <form id="person-name-form">
+      <h2 id="person-dialog-title">Изменить имя</h2>
+      <label for="person-name">Имя человека</label>
+      <input id="person-name" type="text" maxlength="32" required autocomplete="off">
+      <p class="message" id="person-name-error" role="status" hidden></p>
+      <div class="person-dialog-actions">
+        <button class="rename-button" id="cancel-person-name" type="button">Отмена</button>
+        <button class="install-button" id="save-person-name" type="submit">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
   <dialog class="install-guide" id="install-guide" aria-labelledby="install-title">
     <h2 id="install-title">Установить Дамбабанк</h2>
     <section id="install-iphone" aria-labelledby="install-iphone-title">

@@ -10,6 +10,16 @@ const dayName = new Intl.DateTimeFormat('ru-RU', { weekday: 'short', timeZone: '
 const plural = new Intl.PluralRules('ru-RU');
 
 let month = parseDate(localToday());
+const initialPeople = [
+    { id: 'person-1', name: 'Человек 1', store: 'deposits' },
+    { id: 'person-2', name: 'Человек 2', store: 'deposits-person-2' },
+];
+let people = initialPeople.map(person => ({ ...person }));
+let selectedPerson = 'person-1', editingPerson, rememberedPerson;
+try {
+    rememberedPerson = localStorage.getItem('dambabank-person');
+    if (people.some(person => person.id === rememberedPerson)) selectedPerson = rememberedPerson;
+} catch { /* Selection still works when browser storage preferences are restricted. */ }
 let database, ready = false, records = new Map(), readVersion = 0;
 const saving = new Set();
 const updates = typeof BroadcastChannel === 'function' ? new BroadcastChannel('dambabank-deposits') : null;
@@ -28,39 +38,94 @@ function message(text, error = false) {
 
 function openDatabase() {
     return new Promise((resolve, reject) => {
-        const request = indexedDB.open('dambabank-savings', 1);
-        request.onupgradeneeded = () => request.result.createObjectStore('deposits', { keyPath: 'id' });
-        request.onsuccess = () => resolve(request.result);
+        let blocked = false;
+        const request = indexedDB.open('dambabank-savings', 3);
+        request.onupgradeneeded = () => {
+            const connection = request.result;
+            for (const person of initialPeople) {
+                if (!connection.objectStoreNames.contains(person.store)) {
+                    connection.createObjectStore(person.store, { keyPath: 'id' });
+                }
+            }
+            if (!connection.objectStoreNames.contains('people')) {
+                const store = connection.createObjectStore('people', { keyPath: 'id' });
+                for (const person of initialPeople) store.put({ id: person.id, name: person.name });
+            }
+            if (!connection.objectStoreNames.contains('person-deposits')) {
+                const store = connection.createObjectStore('person-deposits', { keyPath: ['personId', 'id'] });
+                store.createIndex('personId', 'personId');
+            }
+        };
+        request.onsuccess = () => {
+            const connection = request.result;
+            if (blocked) message('');
+            connection.onversionchange = () => {
+                connection.close();
+                database = null;
+                ready = false;
+                setStorage('error', 'Обновите страницу');
+                renderMonth();
+            };
+            resolve(connection);
+        };
         request.onerror = () => reject(request.error);
-        request.onblocked = () => reject(new Error('Database upgrade blocked'));
+        request.onblocked = () => {
+            blocked = true;
+            setStorage('loading', 'Ожидаю закрытия старой вкладки');
+            message('Закройте другие вкладки Дамбабанка, чтобы обновить базу профилей. Ваши отметки сохранятся.');
+        };
     });
 }
 
-function readDeposits() {
+function depositStore(personId) {
+    return initialPeople.find(person => person.id === personId)?.store || 'person-deposits';
+}
+
+function applyPeople(names) {
+    const profiles = new Map(initialPeople.map(person => [person.id, { ...person, createdAt: 0 }]));
+    for (const profile of names) {
+        if (typeof profile.id !== 'string' || !profile.id || typeof profile.name !== 'string' || !profile.name.trim()) continue;
+        profiles.set(profile.id, {
+            id: profile.id,
+            name: profile.name.trim().slice(0, 32),
+            createdAt: Number.isFinite(profile.createdAt) ? profile.createdAt : 0,
+        });
+    }
+    people = [...profiles.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+}
+
+function readDeposits(personId) {
     return new Promise((resolve, reject) => {
-        const request = database.transaction('deposits').objectStore('deposits').getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        const storeName = depositStore(personId);
+        const transaction = database.transaction([storeName, 'people']);
+        const store = transaction.objectStore(storeName);
+        const deposits = storeName === 'person-deposits' ? store.index('personId').getAll(personId) : store.getAll();
+        const names = transaction.objectStore('people').getAll();
+        transaction.oncomplete = () => resolve({ rows: deposits.result, names: names.result });
+        transaction.onabort = () => reject(transaction.error || new Error('Read aborted'));
     });
 }
 
-function writeDeposit(id, record) {
+function writeDeposit(personId, id, record) {
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction('deposits', 'readwrite');
-        const store = transaction.objectStore('deposits');
+        const storeName = depositStore(personId);
+        const transaction = database.transaction(storeName, 'readwrite');
+        const store = transaction.objectStore(storeName);
         transaction.oncomplete = resolve;
         transaction.onabort = () => reject(transaction.error || new Error('Write aborted'));
-        if (record) store.put(record);
-        else store.delete(id);
+        if (record) store.put(storeName === 'person-deposits' ? { ...record, personId } : record);
+        else store.delete(storeName === 'person-deposits' ? [personId, id] : id);
     });
 }
 
 async function refreshRecords() {
     if (!database) return;
     const version = ++readVersion;
+    const personId = selectedPerson;
     try {
-        const rows = await readDeposits();
-        if (version !== readVersion) return;
+        const { rows, names } = await readDeposits(personId);
+        if (version !== readVersion || personId !== selectedPerson) return;
+        applyPeople(names);
         records = new Map(rows.filter(record => recordAmount(record) > 0).map(record => [record.id, record]));
         ready = true;
         setStorage('ready', 'База на устройстве');
@@ -71,6 +136,76 @@ async function refreshRecords() {
         message('Не удалось открыть отметки. Попробуйте открыть страницу в обычном окне браузера.', true);
     }
     renderMonth();
+}
+
+function renderPeople() {
+    const list = byId('people-list');
+    const buttons = new Map([...list.querySelectorAll('[data-person]')].map(button => [button.dataset.person, button]));
+    for (const person of people) {
+        let button = buttons.get(person.id);
+        if (!button) {
+            button = element('button', 'person-button');
+            button.type = 'button';
+            button.dataset.person = person.id;
+            list.append(button);
+        }
+        if (button.textContent !== person.name) button.textContent = person.name;
+        button.setAttribute('aria-pressed', String(person.id === selectedPerson));
+        button.disabled = !database;
+    }
+    const person = people.find(item => item.id === selectedPerson);
+    byId('plan-title').textContent = 'Выплаты от мамы · ' + person.name;
+    byId('rename-person').disabled = !ready;
+    byId('add-person').disabled = !ready;
+}
+
+function selectPerson(personId) {
+    if (personId === selectedPerson || !people.some(person => person.id === personId)) return;
+    selectedPerson = personId;
+    try { localStorage.setItem('dambabank-person', personId); } catch { /* Optional selection memory. */ }
+    ready = false;
+    records = new Map();
+    message('');
+    renderMonth();
+    refreshRecords();
+}
+
+async function savePersonName(event) {
+    event.preventDefault();
+    const input = byId('person-name');
+    const name = input.value.trim();
+    input.setCustomValidity(name ? '' : 'Введите имя.');
+    if (!input.reportValidity()) return;
+    const adding = !editingPerson;
+    const personId = editingPerson || 'person-' + (crypto.randomUUID?.()
+        || [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16)).join('-'));
+    const profile = { id: personId, name, createdAt: adding ? Date.now() : people.find(person => person.id === personId).createdAt || 0 };
+    const button = byId('save-person-name');
+    if (button.disabled || !database) return;
+    button.disabled = true;
+    byId('person-name-error').hidden = true;
+    try {
+        await new Promise((resolve, reject) => {
+            const transaction = database.transaction('people', 'readwrite');
+            transaction.oncomplete = resolve;
+            transaction.onabort = () => reject(transaction.error || new Error('Write aborted'));
+            transaction.objectStore('people').put(profile);
+        });
+        if (adding) {
+            people.push(profile);
+            selectPerson(personId);
+        } else {
+            Object.assign(people.find(person => person.id === personId), profile);
+            renderPeople();
+        }
+        updates?.postMessage({ type: 'person' });
+        byId('person-dialog').close();
+    } catch {
+        byId('person-name-error').textContent = adding ? 'Не удалось добавить человека. Попробуйте ещё раз.' : 'Не удалось сохранить имя. Попробуйте ещё раз.';
+        byId('person-name-error').hidden = false;
+    } finally {
+        button.disabled = false;
+    }
 }
 
 function savedBetween(from, to) {
@@ -107,22 +242,26 @@ function element(tag, className, text) {
 }
 
 async function toggleDeposit(entry, date) {
-    if (!ready || saving.has(entry.id)) return;
+    const personId = selectedPerson;
+    const savingKey = personId + ':' + entry.id;
+    if (!ready || saving.has(savingKey)) return;
     const record = records.has(entry.id) ? null : { id: entry.id, date, rule: entry.key };
-    saving.add(entry.id);
+    saving.add(savingKey);
     message('');
     const button = [...byId('deposit-list').querySelectorAll('button')].find(node => node.dataset.deposit === entry.id);
     button?.setAttribute('aria-busy', 'true');
     try {
-        await writeDeposit(entry.id, record);
-        ++readVersion;
-        if (record) records.set(entry.id, record);
-        else records.delete(entry.id);
-        updates?.postMessage('saved');
+        await writeDeposit(personId, entry.id, record);
+        if (personId === selectedPerson) {
+            ++readVersion;
+            if (record) records.set(entry.id, record);
+            else records.delete(entry.id);
+        }
+        updates?.postMessage({ type: 'deposit', personId });
     } catch {
-        message('Не удалось сохранить отметку. Проверьте доступное место и попробуйте ещё раз.', true);
+        if (personId === selectedPerson) message('Не удалось сохранить отметку. Проверьте доступное место и попробуйте ещё раз.', true);
     } finally {
-        saving.delete(entry.id);
+        saving.delete(savingKey);
         renderMonth();
     }
 }
@@ -147,10 +286,13 @@ function createDay(day, today) {
         button.type = 'button';
         button.dataset.deposit = entry.id;
         button.disabled = !ready;
-        if (saving.has(entry.id)) button.setAttribute('aria-busy', 'true');
+        if (saving.has(selectedPerson + ':' + entry.id)) button.setAttribute('aria-busy', 'true');
         button.setAttribute('aria-pressed', String(marked));
         button.setAttribute('aria-label', (marked ? 'Отменить отметку о переводе' : 'Отметить перевод') + ' ' + money(entry.amount) + ' от мамы за ' + shortDate.format(date) + ' — ' + entry.label);
-        button.addEventListener('click', () => toggleDeposit(entry, day.date));
+        const personId = selectedPerson;
+        button.addEventListener('click', () => {
+            if (personId === selectedPerson) toggleDeposit(entry, day.date);
+        });
         line.append(category, amount, button);
         details.append(line);
     }
@@ -164,6 +306,7 @@ function createDay(day, today) {
 }
 
 function renderMonth() {
+    renderPeople();
     const today = localToday();
     const { from, to } = monthRange(month);
     const planned = plan(from, to);
@@ -208,12 +351,37 @@ byId('previous-month').addEventListener('click', () => selectMonth(new Date(Date
 byId('next-month').addEventListener('click', () => selectMonth(new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1))));
 byId('current-month').addEventListener('click', () => selectMonth(parseDate(localToday())));
 for (const id of ['range-start', 'range-end']) byId(id).addEventListener('input', renderForecast);
-updates?.addEventListener('message', refreshRecords);
+byId('people-list').addEventListener('click', event => {
+    const button = event.target.closest('[data-person]');
+    if (button && !button.disabled) selectPerson(button.dataset.person);
+});
+function openPersonDialog(personId = null) {
+    editingPerson = personId;
+    byId('person-dialog-title').textContent = personId ? 'Изменить имя' : 'Добавить человека';
+    byId('save-person-name').textContent = personId ? 'Сохранить' : 'Добавить';
+    byId('person-name').value = personId ? people.find(person => person.id === personId).name : '';
+    byId('person-name').setCustomValidity('');
+    byId('person-name-error').hidden = true;
+    byId('person-dialog').showModal();
+    byId('person-name').focus();
+    byId('person-name').select();
+}
+byId('rename-person').addEventListener('click', () => openPersonDialog(selectedPerson));
+byId('add-person').addEventListener('click', () => openPersonDialog());
+byId('person-name').addEventListener('input', () => byId('person-name').setCustomValidity(''));
+byId('person-name-form').addEventListener('submit', savePersonName);
+byId('cancel-person-name').addEventListener('click', () => byId('person-dialog').close());
+updates?.addEventListener('message', event => {
+    if (event.data?.type !== 'deposit' || event.data.personId === selectedPerson) refreshRecords();
+});
 window.addEventListener('focus', refreshRecords);
 
 selectMonth(month);
 openDatabase().then(async connection => {
     database = connection;
+    const { names } = await readDeposits(selectedPerson);
+    applyPeople(names);
+    if (people.some(person => person.id === rememberedPerson)) selectedPerson = rememberedPerson;
     await refreshRecords();
 }).catch(() => {
     setStorage('error', 'База недоступна');

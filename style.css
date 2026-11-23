@@ -105,6 +105,19 @@ h1 {
     gap: 16px;
 }
 .summary-grid { margin-bottom: 16px; }
+.people-panel { margin-bottom: 20px; }
+.people-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.people-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.people-actions .install-button { min-height: 44px; padding: 8px 12px; font-size: 14px; }
+.people-heading h2 { font-size: 18px; letter-spacing: -.025em; }
+.rename-button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--card); color: var(--green); font-size: 14px; font-weight: 650; }
+.rename-button:hover:not(:disabled) { background: var(--mint); }
+.people-switcher { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.person-button { min-height: 52px; min-width: 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; color: var(--green); background: var(--card); font-weight: 700; overflow-wrap: anywhere; }
+.person-button:hover:not(:disabled) { background: var(--mint); }
+.person-button[aria-pressed="true"] { background: var(--green); color: #fff; border-color: var(--green); box-shadow: 0 3px 0 #153d2c; }
+.person-button[aria-pressed="true"]:hover:not(:disabled) { background: #174936; }
+.people-note { margin-top: 11px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .plan-card, .progress-card, .panel {
     border-radius: 22px;
     border: 1px solid var(--line);
@@ -372,6 +385,10 @@ dl dd { font-size: 13px; font-weight: 700; flex: none; }
 .install-guide ol { margin: 6px 0 0; padding-left: 23px; line-height: 1.55; }
 .install-guide li + li { margin-top: 6px; }
 .install-guide form { display: flex; justify-content: end; }
+.person-dialog form { display: grid; gap: 14px; }
+.person-dialog label { font-size: 14px; font-weight: 650; }
+.person-dialog input { min-width: 0; width: 100%; min-height: 46px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: #fafcf6; }
+.person-dialog-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 10px; }
 @media (max-width: 1040px) {
     .page-actions { justify-content: start; flex-shrink: 1; }
 }

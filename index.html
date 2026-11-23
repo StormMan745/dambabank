@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f6ef">
+  <meta name="description" content="Счётчик выплат от мамы: график и отметки о переводах денег">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Дамбабанк">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+  <script src="install.js" defer></script>
+  <script src="schedule.js" defer></script>
+  <script src="app.js" defer></script>
+  <title>Дамбабанк — счётчик выплат от мамы</title>
+</head>
+<body>
+  <header class="site-header shell">
+    <a class="brand" href="./index.html"><img src="icons/icon-192.png" width="40" height="40" alt="">Дамбабанк</a>
+    <span class="storage-badge" id="storage-badge" data-state="loading"><span class="status-dot"></span><span id="storage-label">Открываю базу…</span></span>
+  </header>
+  <main class="shell">
+    <div class="page-heading">
+      <h1>Счётчик<br class="narrow-break"> выплат</h1>
+      <div class="page-actions">
+        <div class="month-navigation" role="group" aria-label="Выбор месяца">
+        <button class="month-arrow" id="previous-month" type="button" aria-label="Предыдущий месяц">‹</button>
+        <button class="month-current" id="current-month" type="button" title="Вернуться к текущему месяцу"><span id="month-label" aria-live="polite"></span></button>
+        <button class="month-arrow" id="next-month" type="button" aria-label="Следующий месяц">›</button>
+        </div>
+        <button type="button" class="install-button" id="install-app" hidden>Установить</button>
+      </div>
+    </div>
+    <div class="summary-grid">
+      <section class="plan-card" aria-labelledby="plan-title">
+        <div class="plan-content">
+          <h2 id="plan-title">Выплаты от мамы за месяц</h2>
+          <p class="plan-amount" id="month-planned"></p>
+          <p class="plan-description" id="month-count"></p>
+        </div>
+        <div class="plan-art" aria-hidden="true"><i></i><i></i><i></i><span>₽</span></div>
+      </section>
+      <section class="progress-card" aria-labelledby="progress-title">
+        <h2 id="progress-title">Переведено за месяц</h2>
+        <p class="saved-amount" id="month-saved"></p>
+        <progress id="month-progress" aria-label="Доля переведённых выплат за месяц" value="0" max="100"></progress>
+        <div class="progress-details"><span id="month-remaining"></span><strong id="month-percent"></strong></div>
+      </section>
+    </div>
+
+    <div class="details-grid">
+      <section class="panel schedule-panel" aria-labelledby="schedule-title">
+        <div class="panel-heading">
+          <h2 id="schedule-title">График выплат</h2>
+          <p id="next-deposit"></p>
+        </div>
+        <p class="message" id="save-message" role="status" hidden></p>
+        <ul class="deposit-list" id="deposit-list"></ul>
+      </section>
+      <div class="side">
+        <section class="panel forecast-panel" aria-labelledby="forecast-title">
+          <h2 id="forecast-title">Расчёт за период</h2>
+          <div class="date-fields">
+            <label for="range-start">С даты
+              <input type="date" id="range-start" min="1900-01-01" max="9999-12-31" required>
+            </label>
+            <label for="range-end">По дату
+              <input type="date" id="range-end" min="1900-01-01" max="9999-12-31" required>
+            </label>
+          </div>
+          <p class="message" id="range-error" role="status" hidden></p>
+          <div class="forecast-result" id="forecast-result" aria-live="polite">
+            <p>Мама переведёт за период</p>
+            <output for="range-start range-end" id="range-total"></output>
+            <dl class="rule-totals">
+              <div><dt><span class="rule-dot monday-dot"></span>Понедельники</dt><dd id="range-mondays"></dd></div>
+              <div><dt><span class="rule-dot thirteenth-dot"></span>13-е числа</dt><dd id="range-thirteenths"></dd></div>
+              <div><dt>Переведено за период</dt><dd id="range-saved"></dd></div>
+            </dl>
+          </div>
+        </section>
+        <section class="panel rules-panel" aria-labelledby="rules-title">
+          <h2 id="rules-title">Условия выплат</h2>
+          <dl class="rules">
+            <div><dt><span class="rule-dot monday-dot"></span>Каждый понедельник</dt><dd>500 ₽</dd></div>
+            <div><dt><span class="rule-dot thirteenth-dot"></span>Каждого 13-го числа</dt><dd>1 000 ₽</dd></div>
+          </dl>
+          <p class="coincidence-note">Если понедельник выпадает на 13-е, обе выплаты от мамы складываются.</p>
+        </section>
+      </div>
+    </div>
+  </main>
+  <footer class="shell site-footer">Работает без интернета. Отметки сохраняются в этом браузере.</footer>
+  <dialog class="install-guide" id="install-guide" aria-labelledby="install-title">
+    <h2 id="install-title">Установить Дамбабанк</h2>
+    <section id="install-iphone" aria-labelledby="install-iphone-title">
+      <h3 id="install-iphone-title">iPhone и iPad</h3>
+      <ol>
+        <li>Открой эту страницу в Safari и нажми «Поделиться».</li>
+        <li>Выбери «На экран „Домой“». Включи «Открывать как веб-приложение», если видишь этот переключатель.</li>
+        <li>Нажми «Добавить» и один раз открой Дамбабанк с иконки при включённом интернете.</li>
+      </ol>
+    </section>
+    <section id="install-android" aria-labelledby="install-android-title">
+      <h3 id="install-android-title">Android</h3>
+      <ol>
+        <li>Открой эту страницу в Chrome.</li>
+        <li>В меню ⋮ выбери «Установить приложение» или «Добавить на главный экран».</li>
+        <li>Подтверди установку и один раз открой Дамбабанк с иконки при включённом интернете.</li>
+      </ol>
+    </section>
+    <form method="dialog"><button class="install-button" type="submit" autofocus>Понятно</button></form>
+  </dialog>
+</body>
+</html>

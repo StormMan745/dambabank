@@ -1,9 +1,9 @@
 'use strict';
 
-const cacheName = 'dambabank-shell-v6-add-people';
+const cacheName = 'dambabank-shell-v7-profiles-fix';
 const scope = self.registration.scope;
 const index = new URL('index.html', scope).href;
-const files = ['./', 'style.css?v=add-people', 'install.js', 'schedule.js', 'app.js?v=add-people', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png']
+const files = ['./', 'style.css?v=profiles-fix', 'install.js', 'schedule.js', 'app.js?v=profiles-fix', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png']
     .map(file => new URL(file, scope).href);
 const assets = new Set(files);
 

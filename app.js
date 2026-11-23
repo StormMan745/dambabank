@@ -11,8 +11,8 @@ const plural = new Intl.PluralRules('ru-RU');
 
 let month = parseDate(localToday());
 const initialPeople = [
-    { id: 'person-1', name: 'Человек 1', store: 'deposits' },
-    { id: 'person-2', name: 'Человек 2', store: 'deposits-person-2' },
+    { id: 'person-1', name: 'Человек 1' },
+    { id: 'person-2', name: 'Человек 2' },
 ];
 let people = initialPeople.map(person => ({ ...person }));
 let selectedPerson = 'person-1', editingPerson, rememberedPerson;
@@ -22,7 +22,13 @@ try {
 } catch { /* Selection still works when browser storage preferences are restricted. */ }
 let database, ready = false, records = new Map(), readVersion = 0;
 const saving = new Set();
-const updates = typeof BroadcastChannel === 'function' ? new BroadcastChannel('dambabank-deposits') : null;
+const updates = (() => {
+    try {
+        return typeof BroadcastChannel === 'function' ? new BroadcastChannel('dambabank-deposits') : null;
+    } catch {
+        return null;
+    }
+})();
 
 function setStorage(state, label) {
     byId('storage-badge').dataset.state = state;
@@ -38,48 +44,36 @@ function message(text, error = false) {
 
 function openDatabase() {
     return new Promise((resolve, reject) => {
-        let blocked = false;
-        const request = indexedDB.open('dambabank-savings', 3);
+        // Opening the current version lets this page work while older tabs are still using the database.
+        const request = indexedDB.open('dambabank-savings');
         request.onupgradeneeded = () => {
-            const connection = request.result;
-            for (const person of initialPeople) {
-                if (!connection.objectStoreNames.contains(person.store)) {
-                    connection.createObjectStore(person.store, { keyPath: 'id' });
-                }
-            }
-            if (!connection.objectStoreNames.contains('people')) {
-                const store = connection.createObjectStore('people', { keyPath: 'id' });
-                for (const person of initialPeople) store.put({ id: person.id, name: person.name });
-            }
-            if (!connection.objectStoreNames.contains('person-deposits')) {
-                const store = connection.createObjectStore('person-deposits', { keyPath: ['personId', 'id'] });
-                store.createIndex('personId', 'personId');
-            }
+            request.result.createObjectStore('deposits', { keyPath: 'id' });
         };
         request.onsuccess = () => {
             const connection = request.result;
-            if (blocked) message('');
             connection.onversionchange = () => {
                 connection.close();
                 database = null;
                 ready = false;
-                setStorage('error', 'Обновите страницу');
+                ++readVersion;
+                setStorage('loading', 'Открываю базу…');
                 renderMonth();
+                initializeDatabase();
             };
             resolve(connection);
         };
         request.onerror = () => reject(request.error);
-        request.onblocked = () => {
-            blocked = true;
-            setStorage('loading', 'Ожидаю закрытия старой вкладки');
-            message('Закройте другие вкладки Дамбабанка, чтобы обновить базу профилей. Ваши отметки сохранятся.');
-        };
     });
 }
 
-function depositStore(personId) {
-    return initialPeople.find(person => person.id === personId)?.store || 'person-deposits';
+function legacyDepositStore(personId) {
+    if (personId === 'person-1') return null;
+    const name = personId === 'person-2' ? 'deposits-person-2' : 'person-deposits';
+    return database.objectStoreNames.contains(name) ? name : null;
 }
+
+const profileKey = personId => 'profile:' + personId;
+const depositKey = (personId, id) => personId === 'person-1' ? id : 'deposit:' + personId + ':' + id;
 
 function applyPeople(names) {
     const profiles = new Map(initialPeople.map(person => [person.id, { ...person, createdAt: 0 }]));
@@ -96,25 +90,44 @@ function applyPeople(names) {
 
 function readDeposits(personId) {
     return new Promise((resolve, reject) => {
-        const storeName = depositStore(personId);
-        const transaction = database.transaction([storeName, 'people']);
-        const store = transaction.objectStore(storeName);
-        const deposits = storeName === 'person-deposits' ? store.index('personId').getAll(personId) : store.getAll();
-        const names = transaction.objectStore('people').getAll();
-        transaction.oncomplete = () => resolve({ rows: deposits.result, names: names.result });
+        const legacyStore = legacyDepositStore(personId);
+        const hasLegacyPeople = database.objectStoreNames.contains('people');
+        const stores = ['deposits'];
+        if (legacyStore) stores.push(legacyStore);
+        if (hasLegacyPeople) stores.push('people');
+        const transaction = database.transaction(stores);
+        const entries = transaction.objectStore('deposits').getAll();
+        const legacy = legacyStore ? transaction.objectStore(legacyStore) : null;
+        const oldDeposits = legacyStore === 'person-deposits' ? legacy.index('personId').getAll(personId) : legacy?.getAll();
+        const oldNames = hasLegacyPeople ? transaction.objectStore('people').getAll() : null;
+        transaction.oncomplete = () => {
+            const rows = [...(oldDeposits?.result || [])];
+            const names = [...(oldNames?.result || [])];
+            for (const entry of entries.result) {
+                if (entry.profile) names.push(entry.profile);
+                else if (entry.personId === personId && entry.record) rows.push(entry.record);
+                else if (personId === 'person-1' && !entry.personId) rows.push(entry);
+            }
+            resolve({ rows, names });
+        };
         transaction.onabort = () => reject(transaction.error || new Error('Read aborted'));
     });
 }
 
 function writeDeposit(personId, id, record) {
     return new Promise((resolve, reject) => {
-        const storeName = depositStore(personId);
-        const transaction = database.transaction(storeName, 'readwrite');
-        const store = transaction.objectStore(storeName);
+        const legacyStore = record ? null : legacyDepositStore(personId);
+        const transaction = database.transaction(legacyStore ? ['deposits', legacyStore] : ['deposits'], 'readwrite');
+        const store = transaction.objectStore('deposits');
+        const key = depositKey(personId, id);
         transaction.oncomplete = resolve;
         transaction.onabort = () => reject(transaction.error || new Error('Write aborted'));
-        if (record) store.put(storeName === 'person-deposits' ? { ...record, personId } : record);
-        else store.delete(storeName === 'person-deposits' ? [personId, id] : id);
+        if (record) {
+            store.put(personId === 'person-1' ? record : { id: key, personId, record });
+        } else {
+            store.delete(key);
+            if (legacyStore) transaction.objectStore(legacyStore).delete(legacyStore === 'person-deposits' ? [personId, id] : id);
+        }
     });
 }
 
@@ -186,10 +199,10 @@ async function savePersonName(event) {
     byId('person-name-error').hidden = true;
     try {
         await new Promise((resolve, reject) => {
-            const transaction = database.transaction('people', 'readwrite');
+            const transaction = database.transaction('deposits', 'readwrite');
             transaction.oncomplete = resolve;
             transaction.onabort = () => reject(transaction.error || new Error('Write aborted'));
-            transaction.objectStore('people').put(profile);
+            transaction.objectStore('deposits').put({ id: profileKey(personId), profile });
         });
         if (adding) {
             people.push(profile);
@@ -252,12 +265,8 @@ async function toggleDeposit(entry, date) {
     button?.setAttribute('aria-busy', 'true');
     try {
         await writeDeposit(personId, entry.id, record);
-        if (personId === selectedPerson) {
-            ++readVersion;
-            if (record) records.set(entry.id, record);
-            else records.delete(entry.id);
-        }
         updates?.postMessage({ type: 'deposit', personId });
+        if (personId === selectedPerson) await refreshRecords();
     } catch {
         if (personId === selectedPerson) message('Не удалось сохранить отметку. Проверьте доступное место и попробуйте ещё раз.', true);
     } finally {
@@ -377,16 +386,20 @@ updates?.addEventListener('message', event => {
 window.addEventListener('focus', refreshRecords);
 
 selectMonth(month);
-openDatabase().then(async connection => {
-    database = connection;
-    const { names } = await readDeposits(selectedPerson);
-    applyPeople(names);
-    if (people.some(person => person.id === rememberedPerson)) selectedPerson = rememberedPerson;
-    await refreshRecords();
-}).catch(() => {
-    setStorage('error', 'База недоступна');
-    message('Браузер не разрешил открыть локальную базу. Откройте калькулятор в обычном окне Chrome или Edge.', true);
-});
+async function initializeDatabase(preferredPerson = selectedPerson) {
+    try {
+        database = await openDatabase();
+        const { names } = await readDeposits(selectedPerson);
+        applyPeople(names);
+        if (people.some(person => person.id === preferredPerson)) selectedPerson = preferredPerson;
+        else if (!people.some(person => person.id === selectedPerson)) selectedPerson = 'person-1';
+        await refreshRecords();
+    } catch {
+        setStorage('error', 'База недоступна');
+        message('Браузер не разрешил открыть локальную базу. Откройте калькулятор в обычном окне браузера.', true);
+    }
+}
+initializeDatabase(rememberedPerson);
 
 if (window.isSecureContext && /^https?:$/.test(location.protocol) && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});

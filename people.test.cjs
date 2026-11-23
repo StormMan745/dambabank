@@ -45,9 +45,10 @@ test('existing profiles, added people and their deposits remain independent', { 
         return page.locator('[data-person][aria-pressed="true"]').getAttribute('data-person');
     };
 
-    // Seed the previous two-person database, not a fresh empty installation.
-    await page.goto(url + 'icons/icon-192.png');
-    await page.evaluate(() => new Promise((resolve, reject) => {
+    // Keep the old database connection open like a tab running the previous app.
+    const oldTab = await context.newPage();
+    await oldTab.goto(url + 'icons/icon-192.png');
+    await oldTab.evaluate(() => new Promise((resolve, reject) => {
         const request = indexedDB.open('dambabank-savings', 2);
         request.onupgradeneeded = () => {
             for (const name of ['deposits', 'deposits-person-2', 'people']) request.result.createObjectStore(name, { keyPath: 'id' });
@@ -60,11 +61,12 @@ test('existing profiles, added people and their deposits remain independent', { 
             tx.objectStore('deposits-person-2').put({ id: '2026-11-13/thirteenth', date: '2026-11-13', rule: 'thirteenth' });
             tx.objectStore('people').put({ id: 'person-1', name: 'Первый' });
             tx.objectStore('people').put({ id: 'person-2', name: 'Второй' });
-            tx.oncomplete = () => { db.close(); resolve(); };
+            tx.oncomplete = () => { window.oldDatabase = db; resolve(); };
             tx.onabort = () => reject(tx.error);
         };
     }));
     await page.goto(url);
+    await page.waitForFunction(() => !document.querySelector('#add-person').disabled, null, { timeout: 5000 });
     await ready();
     await november();
     await text('#month-saved', '500 ₽');

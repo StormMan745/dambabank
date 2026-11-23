@@ -15,7 +15,7 @@ const initialPeople = [
     { id: 'person-2', name: 'Человек 2' },
 ];
 let people = initialPeople.map(person => ({ ...person }));
-let selectedPerson = 'person-1', editingPerson, rememberedPerson;
+let selectedPerson = 'person-1', editingPerson, personToDelete, rememberedPerson;
 try {
     rememberedPerson = localStorage.getItem('dambabank-person');
     if (people.some(person => person.id === rememberedPerson)) selectedPerson = rememberedPerson;
@@ -73,10 +73,12 @@ function legacyDepositStore(personId) {
 }
 
 const profileKey = personId => 'profile:' + personId;
+const deletedProfileKey = personId => 'deleted-profile:' + personId;
 const depositKey = (personId, id) => personId === 'person-1' ? id : 'deposit:' + personId + ':' + id;
 
-function applyPeople(names) {
+function collectPeople(entries, legacyNames = []) {
     const profiles = new Map(initialPeople.map(person => [person.id, { ...person, createdAt: 0 }]));
+    const names = [...legacyNames, ...entries.filter(entry => entry.profile).map(entry => entry.profile)];
     for (const profile of names) {
         if (typeof profile.id !== 'string' || !profile.id || typeof profile.name !== 'string' || !profile.name.trim()) continue;
         profiles.set(profile.id, {
@@ -85,7 +87,11 @@ function applyPeople(names) {
             createdAt: Number.isFinite(profile.createdAt) ? profile.createdAt : 0,
         });
     }
-    people = [...profiles.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    // A deletion must also hide profiles that older pages used to create automatically.
+    for (const entry of entries) {
+        if (entry.deletedPersonId) profiles.delete(entry.deletedPersonId);
+    }
+    return [...profiles.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
 function readDeposits(personId) {
@@ -102,13 +108,11 @@ function readDeposits(personId) {
         const oldNames = hasLegacyPeople ? transaction.objectStore('people').getAll() : null;
         transaction.oncomplete = () => {
             const rows = [...(oldDeposits?.result || [])];
-            const names = [...(oldNames?.result || [])];
             for (const entry of entries.result) {
-                if (entry.profile) names.push(entry.profile);
-                else if (entry.personId === personId && entry.record) rows.push(entry.record);
-                else if (personId === 'person-1' && !entry.personId) rows.push(entry);
+                if (entry.personId === personId && entry.record) rows.push(entry.record);
+                else if (personId === 'person-1' && recordAmount(entry) > 0) rows.push(entry);
             }
-            resolve({ rows, names });
+            resolve({ rows, profiles: collectPeople(entries.result, oldNames?.result) });
         };
         transaction.onabort = () => reject(transaction.error || new Error('Read aborted'));
     });
@@ -122,12 +126,16 @@ function writeDeposit(personId, id, record) {
         const key = depositKey(personId, id);
         transaction.oncomplete = resolve;
         transaction.onabort = () => reject(transaction.error || new Error('Write aborted'));
-        if (record) {
-            store.put(personId === 'person-1' ? record : { id: key, personId, record });
-        } else {
-            store.delete(key);
-            if (legacyStore) transaction.objectStore(legacyStore).delete(legacyStore === 'person-deposits' ? [personId, id] : id);
-        }
+        const deleted = store.get(deletedProfileKey(personId));
+        deleted.onsuccess = () => {
+            if (deleted.result) return;
+            if (record) {
+                store.put(personId === 'person-1' ? record : { id: key, personId, record });
+            } else {
+                store.delete(key);
+                if (legacyStore) transaction.objectStore(legacyStore).delete(legacyStore === 'person-deposits' ? [personId, id] : id);
+            }
+        };
     });
 }
 
@@ -136,9 +144,16 @@ async function refreshRecords() {
     const version = ++readVersion;
     const personId = selectedPerson;
     try {
-        const { rows, names } = await readDeposits(personId);
+        const { rows, profiles } = await readDeposits(personId);
         if (version !== readVersion || personId !== selectedPerson) return;
-        applyPeople(names);
+        people = profiles;
+        if (!people.some(person => person.id === personId)) {
+            rememberSelection(people[0].id);
+            ready = false;
+            records = new Map();
+            renderMonth();
+            return refreshRecords();
+        }
         records = new Map(rows.filter(record => recordAmount(record) > 0).map(record => [record.id, record]));
         ready = true;
         setStorage('ready', 'База на устройстве');
@@ -154,6 +169,9 @@ async function refreshRecords() {
 function renderPeople() {
     const list = byId('people-list');
     const buttons = new Map([...list.querySelectorAll('[data-person]')].map(button => [button.dataset.person, button]));
+    for (const [id, button] of buttons) {
+        if (!people.some(person => person.id === id)) button.remove();
+    }
     for (const person of people) {
         let button = buttons.get(person.id);
         if (!button) {
@@ -170,12 +188,19 @@ function renderPeople() {
     byId('plan-title').textContent = 'Выплаты от мамы · ' + person.name;
     byId('rename-person').disabled = !ready;
     byId('add-person').disabled = !ready;
+    const remove = byId('delete-person');
+    remove.disabled = !ready || people.length < 2;
+    remove.title = ready && people.length < 2 ? 'Оставьте хотя бы одного человека' : '';
+}
+
+function rememberSelection(personId) {
+    selectedPerson = personId;
+    try { localStorage.setItem('dambabank-person', personId); } catch { /* Optional selection memory. */ }
 }
 
 function selectPerson(personId) {
     if (personId === selectedPerson || !people.some(person => person.id === personId)) return;
-    selectedPerson = personId;
-    try { localStorage.setItem('dambabank-person', personId); } catch { /* Optional selection memory. */ }
+    rememberSelection(personId);
     ready = false;
     records = new Map();
     message('');
@@ -192,7 +217,7 @@ async function savePersonName(event) {
     const adding = !editingPerson;
     const personId = editingPerson || 'person-' + (crypto.randomUUID?.()
         || [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16)).join('-'));
-    const profile = { id: personId, name, createdAt: adding ? Date.now() : people.find(person => person.id === personId).createdAt || 0 };
+    const profile = { id: personId, name, createdAt: adding ? Date.now() : people.find(person => person.id === personId)?.createdAt || 0 };
     const button = byId('save-person-name');
     if (button.disabled || !database) return;
     button.disabled = true;
@@ -200,15 +225,20 @@ async function savePersonName(event) {
     try {
         await new Promise((resolve, reject) => {
             const transaction = database.transaction('deposits', 'readwrite');
-            transaction.oncomplete = resolve;
+            const store = transaction.objectStore('deposits');
+            const deleted = store.get(deletedProfileKey(personId));
+            deleted.onsuccess = () => {
+                if (!deleted.result) store.put({ id: profileKey(personId), profile });
+            };
+            transaction.oncomplete = () => deleted.result ? reject(new Error('Profile was removed')) : resolve();
             transaction.onabort = () => reject(transaction.error || new Error('Write aborted'));
-            transaction.objectStore('deposits').put({ id: profileKey(personId), profile });
         });
         if (adding) {
             people.push(profile);
             selectPerson(personId);
         } else {
-            Object.assign(people.find(person => person.id === personId), profile);
+            const person = people.find(item => item.id === personId);
+            if (person) Object.assign(person, profile);
             renderPeople();
         }
         updates?.postMessage({ type: 'person' });
@@ -218,6 +248,84 @@ async function savePersonName(event) {
         byId('person-name-error').hidden = false;
     } finally {
         button.disabled = false;
+    }
+}
+
+function deleteStoredPerson(personId) {
+    return new Promise((resolve, reject) => {
+        const legacyStore = legacyDepositStore(personId);
+        const hasLegacyPeople = database.objectStoreNames.contains('people');
+        const stores = ['deposits'];
+        if (legacyStore) stores.push(legacyStore);
+        if (hasLegacyPeople) stores.push('people');
+        const transaction = database.transaction(stores, 'readwrite');
+        const store = transaction.objectStore('deposits');
+        const oldPeople = hasLegacyPeople ? transaction.objectStore('people') : null;
+        const entries = store.getAll();
+        const oldNames = oldPeople?.getAll();
+        let outcome;
+
+        // Check the last-profile rule inside the same transaction as the deletion.
+        (oldNames || entries).onsuccess = () => {
+            const profiles = collectPeople(entries.result, oldNames?.result);
+            if (!profiles.some(person => person.id === personId)) {
+                outcome = 'already-deleted';
+                return;
+            }
+            if (profiles.length < 2) {
+                outcome = 'last-profile';
+                return;
+            }
+            store.put({ id: deletedProfileKey(personId), deletedPersonId: personId });
+            store.delete(profileKey(personId));
+            oldPeople?.delete(personId);
+            for (const entry of entries.result) {
+                if (entry.personId === personId || (personId === 'person-1' && recordAmount(entry) > 0)) {
+                    store.delete(entry.id);
+                }
+            }
+            if (legacyStore === 'deposits-person-2') {
+                transaction.objectStore(legacyStore).clear();
+            } else if (legacyStore === 'person-deposits') {
+                const legacy = transaction.objectStore(legacyStore);
+                const keys = legacy.index('personId').getAllKeys(personId);
+                keys.onsuccess = () => {
+                    for (const key of keys.result) legacy.delete(key);
+                };
+            }
+            outcome = 'deleted';
+        };
+        transaction.oncomplete = () => resolve(outcome);
+        transaction.onabort = () => reject(transaction.error || new Error('Delete aborted'));
+    });
+}
+
+async function deletePerson(event) {
+    event.preventDefault();
+    const button = byId('confirm-delete-person');
+    const cancel = byId('cancel-delete-person');
+    const error = byId('delete-person-error');
+    if (button.disabled || !personToDelete || !database) return;
+    button.disabled = true;
+    cancel.disabled = true;
+    error.hidden = true;
+    try {
+        const outcome = await deleteStoredPerson(personToDelete);
+        await refreshRecords();
+        if (outcome === 'last-profile') {
+            error.textContent = 'Оставьте хотя бы одного человека.';
+            error.hidden = false;
+            return;
+        }
+        updates?.postMessage({ type: 'person' });
+        byId('delete-person-dialog').close();
+        byId('people-list').querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+    } catch {
+        error.textContent = 'Не удалось удалить человека. Попробуйте ещё раз.';
+        error.hidden = false;
+    } finally {
+        button.disabled = false;
+        cancel.disabled = false;
     }
 }
 
@@ -380,6 +488,19 @@ byId('add-person').addEventListener('click', () => openPersonDialog());
 byId('person-name').addEventListener('input', () => byId('person-name').setCustomValidity(''));
 byId('person-name-form').addEventListener('submit', savePersonName);
 byId('cancel-person-name').addEventListener('click', () => byId('person-dialog').close());
+byId('delete-person').addEventListener('click', () => {
+    const person = people.find(item => item.id === selectedPerson);
+    if (!ready || !person || people.length < 2) return;
+    personToDelete = person.id;
+    byId('delete-person-name').textContent = person.name;
+    byId('delete-person-error').hidden = true;
+    byId('delete-person-dialog').showModal();
+});
+byId('delete-person-form').addEventListener('submit', deletePerson);
+byId('cancel-delete-person').addEventListener('click', () => byId('delete-person-dialog').close());
+byId('delete-person-dialog').addEventListener('cancel', event => {
+    if (byId('confirm-delete-person').disabled) event.preventDefault();
+});
 updates?.addEventListener('message', event => {
     if (event.data?.type !== 'deposit' || event.data.personId === selectedPerson) refreshRecords();
 });
@@ -389,10 +510,10 @@ selectMonth(month);
 async function initializeDatabase(preferredPerson = selectedPerson) {
     try {
         database = await openDatabase();
-        const { names } = await readDeposits(selectedPerson);
-        applyPeople(names);
+        const { profiles } = await readDeposits(selectedPerson);
+        people = profiles;
         if (people.some(person => person.id === preferredPerson)) selectedPerson = preferredPerson;
-        else if (!people.some(person => person.id === selectedPerson)) selectedPerson = 'person-1';
+        else if (!people.some(person => person.id === selectedPerson)) rememberSelection(people[0].id);
         await refreshRecords();
     } catch {
         setStorage('error', 'База недоступна');

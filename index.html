@@ -10,10 +10,10 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Дамбабанк">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="style.css?v=profiles-fix">
+  <link rel="stylesheet" href="style.css?v=remove-profile">
   <script src="install.js" defer></script>
   <script src="schedule.js" defer></script>
-  <script src="app.js?v=profiles-fix" defer></script>
+  <script src="app.js?v=remove-profile" defer></script>
   <title>Дамбабанк — счётчик выплат от мамы</title>
 </head>
 <body>
@@ -39,6 +39,7 @@
         <div class="people-actions">
           <button class="rename-button" id="rename-person" type="button" disabled>Изменить имя</button>
           <button class="install-button" id="add-person" type="button" disabled>Добавить человека</button>
+          <button class="rename-button delete-person-button" id="delete-person" type="button" disabled>Удалить человека</button>
         </div>
       </div>
       <div class="people-switcher" id="people-list" role="group" aria-label="Выбор человека">
@@ -116,6 +117,17 @@
       <div class="person-dialog-actions">
         <button class="rename-button" id="cancel-person-name" type="button">Отмена</button>
         <button class="install-button" id="save-person-name" type="submit">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="install-guide person-dialog" id="delete-person-dialog" aria-labelledby="delete-person-title" aria-describedby="delete-person-description">
+    <form id="delete-person-form">
+      <h2 id="delete-person-title">Удалить человека?</h2>
+      <p id="delete-person-description">Профиль «<strong id="delete-person-name"></strong>» и все его отметки переводов будут удалены.</p>
+      <p class="message" id="delete-person-error" role="status" hidden></p>
+      <div class="person-dialog-actions">
+        <button class="rename-button" id="cancel-delete-person" type="button" autofocus>Отмена</button>
+        <button class="install-button confirm-delete-button" id="confirm-delete-person" type="submit">Удалить</button>
       </div>
     </form>
   </dialog>

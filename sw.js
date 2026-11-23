@@ -1,9 +1,9 @@
 'use strict';
 
-const cacheName = 'dambabank-shell-v7-profiles-fix';
+const cacheName = 'dambabank-shell-v8-remove-profile';
 const scope = self.registration.scope;
 const index = new URL('index.html', scope).href;
-const files = ['./', 'style.css?v=profiles-fix', 'install.js', 'schedule.js', 'app.js?v=profiles-fix', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png']
+const files = ['./', 'style.css?v=remove-profile', 'install.js', 'schedule.js', 'app.js?v=remove-profile', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png']
     .map(file => new URL(file, scope).href);
 const assets = new Set(files);
 

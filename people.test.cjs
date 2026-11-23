@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { chromium } = require(process.env.DAMBABANK_PLAYWRIGHT_MODULE || 'playwright');
 
-test('existing profiles, added people and their deposits remain independent', { timeout: 60000 }, async t => {
+test('adding, switching and removing people preserves other profiles and payments', { timeout: 90000 }, async t => {
     const port = process.env.DAMBABANK_TEST_PORT || '4072';
     const url = 'http://127.0.0.1:' + port + '/';
     const server = spawn(process.execPath, [path.join(__dirname, 'server.cjs')], {
@@ -43,6 +43,12 @@ test('existing profiles, added people and their deposits remain independent', { 
         await page.waitForFunction(() => !document.querySelector('#person-dialog').open);
         await ready();
         return page.locator('[data-person][aria-pressed="true"]').getAttribute('data-person');
+    };
+    const removeSelected = async () => {
+        await page.locator('#delete-person').click();
+        await page.locator('#confirm-delete-person').click();
+        await page.waitForFunction(() => !document.querySelector('#delete-person-dialog').open);
+        await ready();
     };
 
     // Keep the old database connection open like a tab running the previous app.
@@ -147,5 +153,37 @@ test('existing profiles, added people and their deposits remain independent', { 
     await text('#month-saved', '500 ₽');
     await select('person-2');
     await text('#month-saved', '1 000 ₽');
+
+    await page.locator('#delete-person').click();
+    await text('#delete-person-name', 'Второй');
+    await page.locator('#cancel-delete-person').click();
+    await text('#month-saved', '1 000 ₽');
+    await removeSelected();
+    assert.equal(await page.locator('[data-person="person-2"]').count(), 0);
+    await text('#month-saved', '500 ₽');
+    assert.equal(await page.evaluate(() => new Promise(resolve => {
+        const request = database.transaction('deposits-person-2').objectStore('deposits-person-2').count();
+        request.onsuccess = () => resolve(request.result);
+    })), 0);
+
+    await select(third);
+    await removeSelected();
+    await other.locator('[data-person="' + third + '"]').waitFor({ state: 'detached' });
+    assert.equal(await other.locator('[data-person="person-1"]').getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.evaluate(id => new Promise(resolve => {
+        const request = database.transaction('deposits').objectStore('deposits').getAll();
+        request.onsuccess = () => resolve(request.result.some(entry => entry.personId === id || entry.profile?.id === id));
+    }), third), false);
+
+    for (const id of [fourth, fifth, sixth]) {
+        await select(id);
+        await removeSelected();
+    }
+    await page.reload();
+    await ready();
+    await november();
+    assert.deepEqual(await page.locator('[data-person]').allTextContents(), ['Первый']);
+    assert(await page.locator('#delete-person').isDisabled());
+    await text('#month-saved', '500 ₽');
     assert.deepEqual(errors, []);
 });

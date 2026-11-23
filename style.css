@@ -112,6 +112,8 @@ h1 {
 .people-heading h2 { font-size: 18px; letter-spacing: -.025em; }
 .rename-button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--card); color: var(--green); font-size: 14px; font-weight: 650; }
 .rename-button:hover:not(:disabled) { background: var(--mint); }
+.delete-person-button { color: #8d352c; }
+.delete-person-button:hover:not(:disabled) { background: #fff1e8; }
 .people-switcher { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .person-button { min-height: 52px; min-width: 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; color: var(--green); background: var(--card); font-weight: 700; overflow-wrap: anywhere; }
 .person-button:hover:not(:disabled) { background: var(--mint); }
@@ -389,6 +391,9 @@ dl dd { font-size: 13px; font-weight: 700; flex: none; }
 .person-dialog label { font-size: 14px; font-weight: 650; }
 .person-dialog input { min-width: 0; width: 100%; min-height: 46px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: #fafcf6; }
 .person-dialog-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 10px; }
+#delete-person-description { color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
+.confirm-delete-button { background: #9e3b31; border-color: #882d24; box-shadow: 0 2px 0 #73271e; }
+.confirm-delete-button:hover:not(:disabled) { background: #812e27; }
 @media (max-width: 1040px) {
     .page-actions { justify-content: start; flex-shrink: 1; }
 }

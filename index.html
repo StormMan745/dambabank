@@ -10,18 +10,18 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Дамбабанк">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="style.css?v=ledger-2">
+  <link rel="stylesheet" href="style.css?v=ledger-3">
   <script src="install.js" defer></script>
   <script src="schedule.js" defer></script>
-  <script src="ledger.js?v=2" defer></script>
-  <script src="shared.js?v=2" defer></script>
-  <script src="app.js?v=ledger-2" defer></script>
+  <script src="ledger.js?v=3" defer></script>
+  <script src="shared.js?v=3" defer></script>
+  <script src="app.js?v=ledger-3" defer></script>
   <title>Дамбабанк — счётчик выплат от мамы</title>
 </head>
 <body>
   <header class="site-header shell">
     <a class="brand" href="./index.html"><img src="icons/icon-192.png" width="40" height="40" alt="">Дамбабанк</a>
-    <button type="button" class="storage-badge" id="storage-badge" data-state="loading" aria-haspopup="dialog" aria-label="Настройки базы данных"><span class="status-dot"></span><span id="storage-label">Открываю базу…</span><span aria-hidden="true">⌄</span></button>
+    <button type="button" class="storage-badge" id="storage-badge" data-state="loading" aria-haspopup="dialog" aria-label="Настройки базы данных"><span class="status-dot"></span><span id="storage-label" aria-live="polite">Открываю базу…</span><span aria-hidden="true">⌄</span></button>
   </header>
   <section id="old-site" class="shell panel" hidden>
     <h1>Дамбабанк</h1>
@@ -125,7 +125,7 @@
   <footer class="shell site-footer"><span>Дамбабанк</span><button type="button" id="open-storage">Управление базой</button></footer>
   <dialog class="install-guide database-dialog" id="storage-dialog" aria-labelledby="database-title">
     <form method="dialog" class="dialog-heading"><h2 id="database-title">База данных</h2><button class="dialog-close" aria-label="Закрыть">×</button></form>
-    <p>Профили и выплаты автоматически сохраняются в базе после входа. Для записи нужно соединение с сервером.</p>
+    <p>Без интернета изменения сохраняются на устройстве. Дамбабанк отправит их в общую базу, когда будет доступна связь.</p>
     <label class="rename-button import-label">Загрузить копию<input type="file" id="import-book" accept=".json,application/json"></label>
     <button type="button" class="rename-button" id="export-book">Скачать копию</button>
     <p id="database-message" class="message" role="status" hidden></p>

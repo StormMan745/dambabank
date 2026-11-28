@@ -146,8 +146,8 @@ test('adding, switching and removing people preserves other profiles and payment
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     await context.setOffline(true);
     await page.reload();
-    await page.waitForSelector('#storage-badge[data-state=error]');
-    assert(await page.locator('#add-person').isDisabled());
+    await page.waitForSelector('#storage-badge[data-sync=offline]');
+    assert.equal(await page.locator('#add-person').isEnabled(), true);
     await context.setOffline(false);
     await ready();
     await november();

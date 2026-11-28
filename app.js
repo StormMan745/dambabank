@@ -23,7 +23,7 @@ try {
 let ready = false, records = new Map(), readVersion = 0;
 const saving = new Set();
 let paymentFilter = 'all';
-let rangeOwner;
+let rangeOwner, savedRange;
 let rangeSave = Promise.resolve();
 const updates = (() => {
     try {
@@ -81,14 +81,14 @@ function collectPeople(entries, legacyNames = []) {
 }
 
 async function readCurrent(personId) {
-    const { book } = await SharedLedger.current();
+    const { book, online, pending } = await SharedLedger.current();
     if (!book || !DambaLedger.valid(book)) throw new Error('Общая база недоступна.');
     const profile = book.people.find(person => person.id === personId);
     const rows = (profile?.marks || []).map(id => {
         const [date, rule] = id.split('/');
         return { id, date, rule };
     });
-    return { rows, profiles: book.people.map(({ marks, ...person }) => person) };
+    return { rows, profiles: book.people.map(({ marks, ...person }) => person), online, pending };
 }
 
 async function refreshRecords() {
@@ -96,7 +96,7 @@ async function refreshRecords() {
     const version = ++readVersion;
     const personId = selectedPerson;
     try {
-        const { rows, profiles } = await readCurrent(personId);
+        const { rows, profiles, online, pending } = await readCurrent(personId);
         if (version !== readVersion || personId !== selectedPerson) return;
         people = profiles;
         if (!people.some(person => person.id === personId)) {
@@ -106,21 +106,25 @@ async function refreshRecords() {
             renderMonth();
             return refreshRecords();
         }
-        if (rangeOwner !== personId) {
+        const period = profiles.find(person => person.id === personId).period;
+        const periodKey = period ? period.from + '/' + period.to : '';
+        if (rangeOwner !== personId || (savedRange !== periodKey && !['range-start', 'range-end'].includes(document.activeElement?.id))) {
             rangeOwner = personId;
-            const range = profiles.find(person => person.id === personId).period || monthRange(month);
+            savedRange = periodKey;
+            const range = period || monthRange(month);
             byId('range-start').value = range.from;
             byId('range-end').value = range.to;
         }
         records = new Map(rows.filter(record => recordAmount(record) > 0).map(record => [record.id, record]));
         ready = true;
-        setStorage('ready', 'Общая база');
+        setStorage('ready', pending ? 'На устройстве · ждёт отправки' : online ? 'Общая база' : 'Без сети · на устройстве');
+        byId('storage-badge').dataset.sync = pending ? 'pending' : online ? 'online' : 'offline';
         if (byId('save-message').dataset.source === 'read') message('');
-    } catch {
+    } catch (error) {
         if (version !== readVersion) return;
         ready = false;
         setStorage('error', 'База недоступна');
-        message('Нет связи с базой. Проверьте интернет и повторите попытку.', true);
+        message(error.message || 'Не удалось открыть данные.', true);
         byId('save-message').dataset.source = 'read';
     }
     renderMonth();
@@ -281,7 +285,7 @@ async function toggleDeposit(entry, date) {
         updates?.postMessage({ type: 'deposit', personId });
         if (personId === selectedPerson) await refreshRecords();
     } catch {
-        if (personId === selectedPerson) message('Не удалось подтвердить сохранение отметки. Проверьте соединение и обновите данные.', true);
+        if (personId === selectedPerson) message('Не удалось сохранить отметку. Проверьте, доступно ли хранилище браузера.', true);
     } finally {
         saving.delete(savingKey);
         renderMonth();
@@ -384,7 +388,8 @@ for (const id of ['range-start', 'range-end']) {
         if (!ready || !plan(period.from, period.to)) return;
         const personId = selectedPerson;
         rangeSave = rangeSave.then(() => SharedLedger.change({ type: 'period', id: personId, period }))
-            .catch(() => message('Период не сохранён. Проверьте соединение и повторите ввод.', true));
+            .then(refreshRecords)
+            .catch(() => message('Не удалось сохранить период. Повторите ввод.', true));
     });
 }
 byId('people-list').addEventListener('click', event => {
@@ -423,8 +428,6 @@ byId('delete-person-dialog').addEventListener('cancel', event => {
 updates?.addEventListener('message', event => {
     if (event.data?.type !== 'deposit' || event.data.personId === selectedPerson) refreshRecords();
 });
-window.addEventListener('focus', refreshRecords);
-
 document.querySelector('.payment-filters').addEventListener('click', event => {
     const button = event.target.closest('[data-filter]');
     if (!button) return;
@@ -433,13 +436,19 @@ document.querySelector('.payment-filters').addEventListener('click', event => {
     renderMonth();
 });
 setupStorageDialog();
-window.addEventListener('online', refreshRecords);
+window.addEventListener('dambabank-sync', refreshRecords);
+window.addEventListener('dambabank-sync-conflict', () => message('Некоторые изменения не применились из-за обновления профилей на другом устройстве.', true));
+window.addEventListener('focus', () => SharedLedger.sync());
+window.addEventListener('online', () => SharedLedger.sync());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) SharedLedger.sync(); });
+window.addEventListener('offline', refreshRecords);
 setInterval(() => {
-    if (!document.hidden && !saving.size && !document.querySelector('dialog[open]')) refreshRecords();
-}, 20000);
+    if (!document.hidden && !document.querySelector('dialog[open]')) SharedLedger.sync();
+}, 10000);
 selectMonth(month);
 if (SharedLedger.available) {
     if (rememberedPerson) selectedPerson = rememberedPerson;
+    SharedLedger.sync();
     refreshRecords();
 } else openHostedSite();
 

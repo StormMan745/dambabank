@@ -10,80 +10,207 @@ function hasHistory(book) {
     return book.people.length !== 2 || book.people.some((p, i) => p.id !== initialPeople[i].id || p.name !== initialPeople[i].name || p.marks.length);
 }
 
+
 const SharedLedger = (() => {
     const available = document.documentElement.dataset.database === 'server';
-    let boot, initialized = false;
+    let opening, activeSync, viewedAccount, network = 'unknown', needsSignIn = false;
+    const notify = () => window.dispatchEvent(new Event('dambabank-sync'));
+
+    function openCache() {
+        if (!opening) opening = new Promise((resolve, reject) => {
+            const req = indexedDB.open('dambabank-sync', 1);
+            req.onupgradeneeded = () => req.result.createObjectStore('state');
+            req.onsuccess = () => {
+                req.result.onversionchange = () => { req.result.close(); opening = null; };
+                resolve(req.result);
+            };
+            req.onerror = () => { opening = null; reject(req.error); };
+        });
+        return opening;
+    }
+
+    async function cache(mode, visit, selectedAccount) {
+        const db = await openCache();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('state', mode, { durability: 'strict' });
+            const store = tx.objectStore('state');
+            let result, error;
+            function read(key, next) {
+                const req = store.get(key);
+                req.onsuccess = () => {
+                    try { next(req.result); } catch (err) { error = err; tx.abort(); }
+                };
+            }
+            read('active', account => {
+                const key = selectedAccount || account || 'missing';
+                read(key, state => { result = visit(store, state, account); });
+            });
+            tx.oncomplete = () => resolve(result);
+            tx.onabort = () => reject(error || tx.error);
+        });
+    }
+
     async function request(payload) {
-        const options = { cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(12000) };
+        const options = { cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(10000) };
         if (payload) Object.assign(options, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const response = await fetch('./api/ledger', options);
         if (response.status === 409) return null;
-        if (response.status === 401 || response.redirected) throw new Error('Откройте сайт и войдите в свой аккаунт.');
-        if (response.status === 413 || response.status === 422) throw new Error('Проверьте содержимое и размер копии.');
-        if (!response.ok || !response.headers.get('Content-Type')?.includes('application/json')) throw new Error('Не удалось подключиться к общей базе.');
+        if (response.status === 401 || response.redirected) {
+            needsSignIn = true;
+            throw new Error('Откройте сайт и войдите в свой аккаунт.');
+        }
+        if (!response.ok || !response.headers.get('Content-Type')?.includes('application/json')) {
+            throw new Error('Не удалось подключиться к общей базе.');
+        }
         return response.json();
     }
 
-    async function merge(source, existing) {
+    async function importAction(source) {
         if (!DambaLedger.valid(source)) throw new Error('В копии некорректные данные.');
-        const bytes = new TextEncoder().encode(JSON.stringify(source.people));
-        const digest = await crypto.subtle.digest('SHA-256', bytes);
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(source.people)));
         const key = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-        for (let attempt = 0; attempt < 6; attempt++) {
-            const { revision, book } = existing || await request();
-            existing = null;
-            if (book?.imports?.includes(key)) return;
-            const merged = !book || (revision === 1 && !hasHistory(book) && !book.imports?.length && !book.people.some(p => p.period)) ? { people: [] } : book;
-            for (const item of source.people) {
-                const p = merged.people.find(person => person.id === item.id);
-                const original = initialPeople.find(person => person.id === item.id);
-                if (!p) merged.people.push(structuredClone(item));
-                else if (p.name === item.name || item.name === original?.name || p.name === original?.name) {
-                    if (p.name === original?.name) p.name = item.name;
-                    p.marks = [...new Set([...p.marks, ...item.marks])];
-                    if (!p.period && item.period) p.period = item.period;
-                } else merged.people.push({ ...item, id: 'person-' + crypto.randomUUID() });
-            }
-            merged.imports = [...(merged.imports || []), key];
-            if (await request({ revision, book: merged })) return;
-        }
-        throw new Error('Не удалось завершить перенос. Повторите попытку.');
-    }
-    async function initialize() {
-        const current = await request();
-        const done = preference(migrationKey) === 'yes';
-        const previousShared = preference('dambabank-storage-mode') === 'shared';
-        if (!done && !(previousShared && current.book)) {
-            let local;
-            try { local = await snapshotDevice(); } catch {
-                // Database-only browsers can still save online. Retry legacy access on the next visit.
-                if (!current.book) await request({ revision: 0, book: defaults() });
-                return;
-            }
-            if (hasHistory(local)) { await merge(local, current); migrated(); return; }
-        }
-        if (!current.book) await request({ revision: 0, book: defaults() });
-        migrated();
-    }
-    async function current() {
-        if (!initialized) {
-            boot ||= initialize().then(() => { initialized = true; }).finally(() => { boot = null; });
-            await boot;
-        }
-        return request();
-    }
-    async function change(action) {
-        for (let attempt = 0; attempt < 5; attempt++) {
-            const { book, revision } = await request();
-            if (!book) throw new Error('Подключите общую базу.');
-            const result = DambaLedger.change(book, action);
-            if (result === 'last-profile' || result === 'already-deleted') return result;
-            if (await request({ revision, book })) return result;
-        }
-        throw new Error('Базу сейчас редактируют. Повторите действие.');
+        return { type: 'import', key, people: source.people };
     }
 
-    return { available, current, change, merge };
+    function apply(book, action, revision) {
+        if (action.type !== 'import') {
+            if (!['add', 'delete'].includes(action.type) && !book.people.some(p => p.id === action.id)) return 'discarded';
+            return DambaLedger.change(book, action);
+        }
+        if (book.imports?.includes(action.key)) return 'saved';
+        if (revision <= 1 && !hasHistory(book) && !book.imports?.length && !book.people.some(p => p.period)) book.people = [];
+        for (const [index, item] of action.people.entries()) {
+            const match = book.people.find(person => person.id === item.id);
+            const original = initialPeople.find(person => person.id === item.id);
+            if (!match) book.people.push(structuredClone(item));
+            else if (match.name === item.name || item.name === original?.name || match.name === original?.name) {
+                if (match.name === original?.name) match.name = item.name;
+                match.marks = [...new Set([...match.marks, ...item.marks])];
+                if (!match.period && item.period) match.period = item.period;
+            } else book.people.push({ ...structuredClone(item), id: 'person-import-' + action.key + '-' + index });
+        }
+        book.imports = [...(book.imports || []), action.key];
+        return 'saved';
+    }
+
+    function confirmed(state) {
+        return state.book.deviceRevisions?.[state.device] || 0;
+    }
+
+    function project(state) {
+        const book = structuredClone(state.book);
+        for (const item of state.queue) apply(book, item.action, state.revision);
+        return book;
+    }
+
+    async function readOrCreateRemote() {
+        for (let attempt = 0; attempt < 6; attempt++) {
+            const remote = await request();
+            if (!/^[0-9a-f]{64}$/.test(remote.account)) throw new Error('База недоступна.');
+            needsSignIn = false;
+            if (remote.book && !DambaLedger.valid(remote.book)) throw new Error('База недоступна.');
+            let book = remote.book ? structuredClone(remote.book) : defaults();
+            if (preference(migrationKey) !== 'yes') {
+                const previousShared = preference('dambabank-storage-mode') === 'shared';
+                const local = !previousShared || !remote.book ? await snapshotDevice().catch(() => null) : null;
+                if (local && hasHistory(local)) apply(book, await importAction(local), remote.revision);
+                if (remote.book && JSON.stringify(book) === JSON.stringify(remote.book)) { migrated(); return remote; }
+            } else if (remote.book) return remote;
+            const saved = await request({ account: remote.account, revision: remote.revision, book });
+            if (saved) { migrated(); return { account: remote.account, revision: saved.revision, book }; }
+        }
+        throw new Error('Данные уже изменились. Повторяем синхронизацию.');
+    }
+
+    function storeRemote(remote) {
+        return cache('readwrite', (store, state) => {
+            state ??= { device: crypto.randomUUID(), counter: 0, queue: [], revision: 0 };
+            if (remote.revision >= state.revision) {
+                Object.assign(state, { book: remote.book, revision: remote.revision });
+                const ack = confirmed(state);
+                state.queue = state.queue.filter(item => item.counter > ack);
+                store.put(state, remote.account);
+            }
+            store.put(remote.account, 'active');
+            return state;
+        }, remote.account);
+    }
+
+    async function flush() {
+        let conflicts = false;
+        try {
+            if (!navigator.onLine) { network = 'offline'; return; }
+            for (let attempt = 0; attempt < 8; attempt++) {
+                const remote = await readOrCreateRemote();
+                const state = await storeRemote(remote);
+                network = 'online';
+                if (!state.queue.length) return;
+                const book = structuredClone(state.book);
+                let batchConflict = false;
+                for (const { action } of state.queue) {
+                    const result = apply(book, action, state.revision);
+                    batchConflict ||= result === 'discarded' || result === 'last-profile';
+                }
+                const counter = state.queue.at(-1).counter;
+                book.deviceRevisions = { ...book.deviceRevisions, [state.device]: counter };
+                const saved = await request({ account: remote.account, revision: state.revision, book });
+                if (saved) {
+                    conflicts ||= batchConflict;
+                    await storeRemote({ account: remote.account, revision: saved.revision, book });
+                }
+            }
+        } catch {
+            network = needsSignIn ? 'signin' : 'offline';
+        } finally {
+            if (conflicts) window.dispatchEvent(new Event('dambabank-sync-conflict'));
+            notify();
+        }
+    }
+
+    function sync() {
+        if (!available) return Promise.resolve();
+        activeSync ||= flush().finally(() => { activeSync = null; });
+        return activeSync;
+    }
+
+    async function current() {
+        if (network === 'unknown' && navigator.onLine) await activeSync;
+        if (needsSignIn) throw new Error('Войдите в свой аккаунт для синхронизации.');
+        let cached = await cache('readonly', (_store, state, account) => ({ state, account }));
+        if (!cached.state) {
+            await activeSync;
+            cached = await cache('readonly', (_store, state, account) => ({ state, account }));
+        }
+        if (!cached.state || needsSignIn) throw new Error('Подключитесь к интернету, чтобы открыть общую базу.');
+        viewedAccount = cached.account;
+        return { book: project(cached.state), pending: cached.state.queue.length, online: network === 'online' && navigator.onLine };
+    }
+
+    async function enqueue(action) {
+        const account = viewedAccount;
+        const result = await cache('readwrite', (store, state, active) => {
+            if (needsSignIn || !state || account !== active) throw new Error('Откройте данные своего аккаунта ещё раз.');
+            const book = project(state);
+            const result = apply(book, action, state.revision);
+            if (result === 'discarded') throw new Error('Этот профиль уже удалён.');
+            if (result === 'last-profile' || result === 'already-deleted') return result;
+            if (!DambaLedger.valid(book) || new TextEncoder().encode(JSON.stringify(book)).byteLength > 1000 * 1024) {
+                throw new Error('Слишком много данных для одной базы.');
+            }
+            state.queue.push({ counter: ++state.counter, action });
+            store.put(state, account);
+            return result;
+        });
+        void sync();
+        return result;
+    }
+
+    async function merge(book) {
+        await current();
+        return enqueue(await importAction(book));
+    }
+
+    return { available, current, change: enqueue, merge, sync };
 })();
 async function snapshotDevice() {
     const database = await openDatabase();
@@ -175,7 +302,7 @@ function setupStorageDialog() {
             await SharedLedger.current();
             await SharedLedger.merge(copy.book);
             await refreshRecords();
-            report('Записи из копии сохранены.');
+            report('Записи из копии сохранены. Они отправятся в общую базу при подключении.');
         } catch { report('Не удалось загрузить копию. Проверьте файл и соединение.'); }
     };
     if (!SharedLedger.available || !window.opener) return;
@@ -185,6 +312,8 @@ function setupStorageDialog() {
         try {
             await SharedLedger.current();
             await SharedLedger.merge(event.data.book);
+            await SharedLedger.sync();
+            if ((await SharedLedger.current()).pending) throw new Error('Перенос ожидает синхронизации.');
             await refreshRecords();
             opener.postMessage('dambabank-imported', oldOrigin);
         } catch { message('Не удалось перенести старые записи. Они доступны по прежнему адресу.', true); }

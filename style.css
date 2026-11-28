@@ -443,3 +443,6 @@ dl dd { font-size: 13px; font-weight: 700; flex: none; }
   .database-dialog { padding: 16px; }
   .storage-badge { padding: 8px; min-height: 44px; }
 }
+
+.storage-badge[data-state=ready][data-sync=pending] .status-dot,
+.storage-badge[data-state=ready][data-sync=offline] .status-dot { background: #9b6808; }

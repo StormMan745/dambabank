@@ -19,12 +19,14 @@ test('shared database isolates accounts and requires a same-origin write', async
     }) }) };
     const url = 'https://example.test/api/ledger';
     const get = owner => handleLedger(new Request(url), db, owner);
-    const write = (revision = 0, origin = 'https://example.test') => handleLedger(new Request(url, {
+    const write = (revision = 0, origin = 'https://example.test', account) => handleLedger(new Request(url, {
         method:'PUT', headers: {'Content-Type':'application/json', Origin:origin},
-        body: JSON.stringify({ revision, book: {people: [{id:'person-1', name:'Тест', createdAt:0, marks:[]}]}}),
+        body: JSON.stringify({ revision, account, book: {people: [{id:'person-1', name:'Тест', createdAt:0, marks:[]}]}}),
     }), db, 'first');
     assert.equal((await get(null)).status, 401);
     assert.equal((await write(0,'https://other.test')).status, 403);
+    const otherAccount = (await (await get('second')).json()).account;
+    assert.equal((await write(0, 'https://example.test', otherAccount)).status, 403);
     assert.equal((await write()).status, 200);
     assert.equal((await write()).status, 409);
     assert.equal((await (await get('first')).json()).revision, 1);
@@ -49,13 +51,19 @@ test('two devices share imported profiles, retain concurrent marks and survive r
     async function stop() { const done = once(server,'exit'); server.kill(); await done; }
     const browser = await chromium.launch({headless:true, executablePath:process.env.DAMBABANK_CHROME_PATH || undefined});
     t.after(async () => { await browser.close(); if (server.exitCode === null && !server.killed) await stop(); await fs.rm(folder,{recursive:true,force:true}); });
-    const phone = await browser.newPage({viewport:{width:360,height:760}});
+    const phoneContext = await browser.newContext({viewport:{width:360,height:760}});
+    let phone = await phoneContext.newPage();
     const pc = await browser.newPage();
     async function open(page) {
         await page.goto(url);
         await page.waitForFunction(() => !document.querySelector('#add-person').disabled);
         assert.equal(await page.locator('#storage-label').textContent(), 'Общая база');
     }
+    const waitForCloud = page => page.waitForFunction(async () => {
+        await SharedLedger.sync();
+        const { pending, online } = await SharedLedger.current();
+        return online && pending === 0;
+    });
     const isShared = page => page.waitForFunction(() => document.getElementById('storage-label').textContent === 'Общая база' && !document.getElementById('storage-dialog').open);
     await open(phone);
     const backup = {format:'dambabank-1',book:{people:[{id:'person-1',name:'Семья',createdAt:0,marks:['2026-11-02/monday']}]}};
@@ -73,8 +81,11 @@ test('two devices share imported profiles, retain concurrent marks and survive r
         assert.equal(await page.locator('[data-person="person-1"]').textContent(),'Семья');
     }
     await Promise.all([phone.locator('[data-deposit="2026-11-09/monday"]').click(), pc.locator('[data-deposit="2026-11-13/thirteenth"]').click()]);
-    for(const page of [phone,pc]) await page.waitForFunction(() => saving.size === 0);
-    await phone.evaluate(() => refreshRecords());
+    for (const page of [phone, pc]) {
+        await page.waitForFunction(() => saving.size === 0);
+        await waitForCloud(page);
+    }
+    await phone.evaluate(async () => { await SharedLedger.sync(); await refreshRecords(); });
     assert.equal(await phone.locator('#month-saved').textContent(),'2 000 ₽');
     await phone.locator('[data-filter="paid"]').click();
     assert.equal(await phone.locator('[data-deposit]').count(),3);
@@ -84,7 +95,8 @@ test('two devices share imported profiles, retain concurrent marks and survive r
     await phone.locator('#person-name').fill('Второй');
     await phone.locator('#save-person-name').click();
     await phone.waitForFunction(() => !document.querySelector('#person-dialog').open);
-    await pc.evaluate(() => refreshRecords());
+    await waitForCloud(phone);
+    await pc.evaluate(async () => { await SharedLedger.sync(); await refreshRecords(); });
     assert.equal(await pc.locator('[data-person]').count(),2);
     await phone.locator('#delete-person').click();
     await phone.locator('#confirm-delete-person').click();
@@ -92,6 +104,8 @@ test('two devices share imported profiles, retain concurrent marks and survive r
     await pc.locator('#range-start').fill('2026-10-01');
     await pc.locator('#range-start').dispatchEvent('change');
     await pc.evaluate(() => rangeSave);
+    await pc.evaluate(() => SharedLedger.sync());
+    await waitForCloud(pc);
     await stop();
     server = await start();
     await pc.reload();
@@ -101,4 +115,47 @@ test('two devices share imported profiles, retain concurrent marks and survive r
     assert.equal(await pc.locator('[data-person]').count(),1);
     assert.equal(await pc.locator('#month-saved').textContent(),'2 000 ₽');
     assert.equal(await pc.locator('#delete-person').isDisabled(),true);
+
+    await waitForCloud(phone);
+    await phone.evaluate(() => navigator.serviceWorker.ready);
+    await phoneContext.setOffline(true);
+    await phone.close();
+    phone = await phoneContext.newPage();
+    await phone.goto(url);
+    await phone.locator('#storage-badge[data-sync=offline]').waitFor();
+    await phone.evaluate(() => selectMonth(SavingsSchedule.parseDate('2026-11-01')));
+    await phone.locator('#add-person').click();
+    await phone.locator('#person-name').fill('Без сети');
+    await phone.locator('#save-person-name').click();
+    await phone.locator('#person-dialog').waitFor({ state:'hidden' });
+    await phone.locator('[data-deposit="2026-11-02/monday"]').click();
+    await phone.waitForFunction(() => document.getElementById('month-saved').textContent === '500 ₽');
+    await phone.reload();
+    await phone.locator('#storage-badge[data-sync=pending]').waitFor();
+    await phone.evaluate(() => selectMonth(SavingsSchedule.parseDate('2026-11-01')));
+    assert.equal(await phone.locator('[data-person][aria-pressed=true]').textContent(), 'Без сети');
+    assert.equal(await phone.locator('#month-saved').textContent(), '500 ₽');
+
+    await pc.locator('[data-deposit="2026-11-16/monday"]').click();
+    await pc.waitForFunction(() => saving.size === 0);
+    await waitForCloud(pc);
+    const remoteBefore = await (await fetch(url + 'api/ledger')).json();
+    assert.equal(remoteBefore.book.people.length, 1);
+    await phone.evaluate(() => {
+        const realFetch = window.fetch.bind(window);
+        window.fetch = async (input, options) => {
+            const response = await realFetch(input, options);
+            if (!window.droppedResponse && input === './api/ledger' && options?.method === 'PUT' && response.ok) {
+                window.droppedResponse = true;
+                throw new TypeError('Simulated connection loss after the server saved the request');
+            }
+            return response;
+        };
+    });
+    await phoneContext.setOffline(false);
+    await phone.waitForFunction(async () => window.droppedResponse && (await SharedLedger.current()).pending === 0, null, {timeout:25000});
+    const remoteAfter = await (await fetch(url + 'api/ledger')).json();
+    assert.equal(remoteAfter.revision, remoteBefore.revision + 1);
+    assert.deepEqual(remoteAfter.book.people.find(p => p.name === 'Без сети').marks, ['2026-11-02/monday']);
+    assert(remoteAfter.book.people[0].marks.includes('2026-11-16/monday'));
 });

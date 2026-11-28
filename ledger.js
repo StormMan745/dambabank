@@ -17,6 +17,9 @@ const DambaLedger = (() => {
     function valid(book) {
         if (book?.imports !== undefined && (!Array.isArray(book.imports) || !book.imports.every(v => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v)))) return false;
         if (!Array.isArray(book?.people) || !book.people.length || book.people.length > 500) return false;
+        if (book.deviceRevisions !== undefined &&
+            (!book.deviceRevisions || Array.isArray(book.deviceRevisions) || typeof book.deviceRevisions !== 'object' ||
+                !Object.entries(book.deviceRevisions).every(([id, count]) => /^[0-9a-f-]{36}$/.test(id) && Number.isSafeInteger(count) && count > 0))) return false;
         const ids = new Set();
         return book.people.every(person => {
             if (!person || typeof person.id !== 'string' || !/^person-[a-z0-9-]{1,80}$/i.test(person.id) || ids.has(person.id)) return false;

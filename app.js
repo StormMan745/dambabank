@@ -20,9 +20,11 @@ try {
     rememberedPerson = localStorage.getItem('dambabank-person');
     if (people.some(person => person.id === rememberedPerson)) selectedPerson = rememberedPerson;
 } catch { /* Selection still works when browser storage preferences are restricted. */ }
-let database, ready = false, records = new Map(), readVersion = 0;
+let ready = false, records = new Map(), readVersion = 0;
 const saving = new Set();
 let paymentFilter = 'all';
+let rangeOwner;
+let rangeSave = Promise.resolve();
 const updates = (() => {
     try {
         return typeof BroadcastChannel === 'function' ? new BroadcastChannel('dambabank-deposits') : null;
@@ -53,30 +55,12 @@ function openDatabase() {
         };
         request.onsuccess = () => {
             const connection = request.result;
-            connection.onversionchange = () => {
-                connection.close();
-                database = null;
-                ready = false;
-                ++readVersion;
-                setStorage('loading', 'Открываю базу…');
-                renderMonth();
-                initializeDatabase();
-            };
+            connection.onversionchange = () => connection.close();
             resolve(connection);
         };
         request.onerror = () => reject(request.error);
     });
 }
-
-function legacyDepositStore(personId) {
-    if (personId === 'person-1') return null;
-    const name = personId === 'person-2' ? 'deposits-person-2' : 'person-deposits';
-    return database.objectStoreNames.contains(name) ? name : null;
-}
-
-const profileKey = personId => 'profile:' + personId;
-const deletedProfileKey = personId => 'deleted-profile:' + personId;
-const depositKey = (personId, id) => personId === 'person-1' ? id : 'deposit:' + personId + ':' + id;
 
 function collectPeople(entries, legacyNames = []) {
     const profiles = new Map(initialPeople.map(person => [person.id, { ...person, createdAt: 0 }]));
@@ -96,55 +80,8 @@ function collectPeople(entries, legacyNames = []) {
     return [...profiles.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
-function readDeposits(personId) {
-    return new Promise((resolve, reject) => {
-        const legacyStore = legacyDepositStore(personId);
-        const hasLegacyPeople = database.objectStoreNames.contains('people');
-        const stores = ['deposits'];
-        if (legacyStore) stores.push(legacyStore);
-        if (hasLegacyPeople) stores.push('people');
-        const transaction = database.transaction(stores);
-        const entries = transaction.objectStore('deposits').getAll();
-        const legacy = legacyStore ? transaction.objectStore(legacyStore) : null;
-        const oldDeposits = legacyStore === 'person-deposits' ? legacy.index('personId').getAll(personId) : legacy?.getAll();
-        const oldNames = hasLegacyPeople ? transaction.objectStore('people').getAll() : null;
-        transaction.oncomplete = () => {
-            const rows = [...(oldDeposits?.result || [])];
-            for (const entry of entries.result) {
-                if (entry.personId === personId && entry.record) rows.push(entry.record);
-                else if (personId === 'person-1' && recordAmount(entry) > 0) rows.push(entry);
-            }
-            resolve({ rows, profiles: collectPeople(entries.result, oldNames?.result) });
-        };
-        transaction.onabort = () => reject(transaction.error || new Error('Read aborted'));
-    });
-}
-
-function writeDeposit(personId, id, record) {
-    if (SharedLedger.active) return SharedLedger.change({ type: 'mark', id: personId, mark: id, marked: Boolean(record) });
-    return new Promise((resolve, reject) => {
-        const legacyStore = record ? null : legacyDepositStore(personId);
-        const transaction = database.transaction(legacyStore ? ['deposits', legacyStore] : ['deposits'], 'readwrite');
-        const store = transaction.objectStore('deposits');
-        const key = depositKey(personId, id);
-        transaction.oncomplete = resolve;
-        transaction.onabort = () => reject(transaction.error || new Error('Write aborted'));
-        const deleted = store.get(deletedProfileKey(personId));
-        deleted.onsuccess = () => {
-            if (deleted.result) return;
-            if (record) {
-                store.put(personId === 'person-1' ? record : { id: key, personId, record });
-            } else {
-                store.delete(key);
-                if (legacyStore) transaction.objectStore(legacyStore).delete(legacyStore === 'person-deposits' ? [personId, id] : id);
-            }
-        };
-    });
-}
-
 async function readCurrent(personId) {
-    if (!SharedLedger.active) return readDeposits(personId);
-    const { book } = await SharedLedger.read();
+    const { book } = await SharedLedger.current();
     if (!book || !DambaLedger.valid(book)) throw new Error('Общая база недоступна.');
     const profile = book.people.find(person => person.id === personId);
     const rows = (profile?.marks || []).map(id => {
@@ -155,7 +92,7 @@ async function readCurrent(personId) {
 }
 
 async function refreshRecords() {
-    if (!database && !SharedLedger.active) return;
+    if (!SharedLedger.available) return;
     const version = ++readVersion;
     const personId = selectedPerson;
     try {
@@ -169,15 +106,21 @@ async function refreshRecords() {
             renderMonth();
             return refreshRecords();
         }
+        if (rangeOwner !== personId) {
+            rangeOwner = personId;
+            const range = profiles.find(person => person.id === personId).period || monthRange(month);
+            byId('range-start').value = range.from;
+            byId('range-end').value = range.to;
+        }
         records = new Map(rows.filter(record => recordAmount(record) > 0).map(record => [record.id, record]));
         ready = true;
-        setStorage('ready', SharedLedger.active ? 'Общая база' : 'База на устройстве');
+        setStorage('ready', 'Общая база');
         if (byId('save-message').dataset.source === 'read') message('');
     } catch {
         if (version !== readVersion) return;
         ready = false;
         setStorage('error', 'База недоступна');
-        message(SharedLedger.active ? 'Общая база недоступна. Проверьте соединение или откройте профили этого устройства в настройках базы.' : 'Не удалось открыть отметки. Попробуйте обычное окно браузера.', true);
+        message('Нет связи с базой. Проверьте интернет и повторите попытку.', true);
         byId('save-message').dataset.source = 'read';
     }
     renderMonth();
@@ -199,10 +142,11 @@ function renderPeople() {
         }
         if (button.textContent !== person.name) button.textContent = person.name;
         button.setAttribute('aria-pressed', String(person.id === selectedPerson));
-        button.disabled = !database && !SharedLedger.active;
+        button.disabled = !ready;
     }
     const person = people.find(item => item.id === selectedPerson);
     byId('plan-title').textContent = 'План на месяц · ' + (person?.name || '…');
+    byId('range-start').disabled = byId('range-end').disabled = !ready;
     byId('rename-person').disabled = !ready;
     byId('add-person').disabled = !ready;
     const remove = byId('delete-person');
@@ -236,22 +180,11 @@ async function savePersonName(event) {
         || [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16)).join('-'));
     const profile = { id: personId, name, createdAt: adding ? Date.now() : people.find(person => person.id === personId)?.createdAt || 0 };
     const button = byId('save-person-name');
-    if (button.disabled || (!database && !SharedLedger.active)) return;
+    if (button.disabled || !ready) return;
     button.disabled = true;
     byId('person-name-error').hidden = true;
     try {
-        if (SharedLedger.active) {
-            await SharedLedger.change({ type: adding ? 'add' : 'rename', id: personId, profile, name });
-        } else await new Promise((resolve, reject) => {
-            const transaction = database.transaction('deposits', 'readwrite');
-            const store = transaction.objectStore('deposits');
-            const deleted = store.get(deletedProfileKey(personId));
-            deleted.onsuccess = () => {
-                if (!deleted.result) store.put({ id: profileKey(personId), profile });
-            };
-            transaction.oncomplete = () => deleted.result ? reject(new Error('Profile was removed')) : resolve();
-            transaction.onabort = () => reject(transaction.error || new Error('Write aborted'));
-        });
+        await SharedLedger.change({ type: adding ? 'add' : 'rename', id: personId, profile, name });
         if (adding) {
             people.push(profile);
             selectPerson(personId);
@@ -270,67 +203,17 @@ async function savePersonName(event) {
     }
 }
 
-function deleteStoredPerson(personId) {
-    if (SharedLedger.active) return SharedLedger.change({ type: 'delete', id: personId });
-    return new Promise((resolve, reject) => {
-        const legacyStore = legacyDepositStore(personId);
-        const hasLegacyPeople = database.objectStoreNames.contains('people');
-        const stores = ['deposits'];
-        if (legacyStore) stores.push(legacyStore);
-        if (hasLegacyPeople) stores.push('people');
-        const transaction = database.transaction(stores, 'readwrite');
-        const store = transaction.objectStore('deposits');
-        const oldPeople = hasLegacyPeople ? transaction.objectStore('people') : null;
-        const entries = store.getAll();
-        const oldNames = oldPeople?.getAll();
-        let outcome;
-
-        // Check the last-profile rule inside the same transaction as the deletion.
-        (oldNames || entries).onsuccess = () => {
-            const profiles = collectPeople(entries.result, oldNames?.result);
-            if (!profiles.some(person => person.id === personId)) {
-                outcome = 'already-deleted';
-                return;
-            }
-            if (profiles.length < 2) {
-                outcome = 'last-profile';
-                return;
-            }
-            store.put({ id: deletedProfileKey(personId), deletedPersonId: personId });
-            store.delete(profileKey(personId));
-            oldPeople?.delete(personId);
-            for (const entry of entries.result) {
-                if (entry.personId === personId || (personId === 'person-1' && recordAmount(entry) > 0)) {
-                    store.delete(entry.id);
-                }
-            }
-            if (legacyStore === 'deposits-person-2') {
-                transaction.objectStore(legacyStore).clear();
-            } else if (legacyStore === 'person-deposits') {
-                const legacy = transaction.objectStore(legacyStore);
-                const keys = legacy.index('personId').getAllKeys(personId);
-                keys.onsuccess = () => {
-                    for (const key of keys.result) legacy.delete(key);
-                };
-            }
-            outcome = 'deleted';
-        };
-        transaction.oncomplete = () => resolve(outcome);
-        transaction.onabort = () => reject(transaction.error || new Error('Delete aborted'));
-    });
-}
-
 async function deletePerson(event) {
     event.preventDefault();
     const button = byId('confirm-delete-person');
     const cancel = byId('cancel-delete-person');
     const error = byId('delete-person-error');
-    if (button.disabled || !personToDelete || (!database && !SharedLedger.active)) return;
+    if (button.disabled || !personToDelete || !ready) return;
     button.disabled = true;
     cancel.disabled = true;
     error.hidden = true;
     try {
-        const outcome = await deleteStoredPerson(personToDelete);
+        const outcome = await SharedLedger.change({ type: 'delete', id: personToDelete });
         await refreshRecords();
         if (outcome === 'last-profile') {
             error.textContent = 'Оставьте хотя бы одного человека.';
@@ -394,11 +277,11 @@ async function toggleDeposit(entry, date) {
     const button = [...byId('deposit-list').querySelectorAll('button')].find(node => node.dataset.deposit === entry.id);
     button?.setAttribute('aria-busy', 'true');
     try {
-        await writeDeposit(personId, entry.id, record);
+        await SharedLedger.change({ type: 'mark', id: personId, mark: entry.id, marked: Boolean(record) });
         updates?.postMessage({ type: 'deposit', personId });
         if (personId === selectedPerson) await refreshRecords();
     } catch {
-        if (personId === selectedPerson) message(SharedLedger.active ? 'Не удалось сохранить отметку в общей базе. Проверьте соединение и повторите.' : 'Не удалось сохранить отметку. Проверьте доступное место и попробуйте ещё раз.', true);
+        if (personId === selectedPerson) message('Не удалось подтвердить сохранение отметки. Проверьте соединение и обновите данные.', true);
     } finally {
         saving.delete(savingKey);
         renderMonth();
@@ -494,7 +377,16 @@ function selectMonth(date) {
 byId('previous-month').addEventListener('click', () => selectMonth(new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() - 1, 1))));
 byId('next-month').addEventListener('click', () => selectMonth(new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1))));
 byId('current-month').addEventListener('click', () => selectMonth(parseDate(localToday())));
-for (const id of ['range-start', 'range-end']) byId(id).addEventListener('input', renderForecast);
+for (const id of ['range-start', 'range-end']) {
+    byId(id).addEventListener('input', renderForecast);
+    byId(id).addEventListener('change', () => {
+        const period = { from: byId('range-start').value, to: byId('range-end').value };
+        if (!ready || !plan(period.from, period.to)) return;
+        const personId = selectedPerson;
+        rangeSave = rangeSave.then(() => SharedLedger.change({ type: 'period', id: personId, period }))
+            .catch(() => message('Период не сохранён. Проверьте соединение и повторите ввод.', true));
+    });
+}
 byId('people-list').addEventListener('click', event => {
     const button = event.target.closest('[data-person]');
     if (button && !button.disabled) selectPerson(button.dataset.person);
@@ -541,31 +433,15 @@ document.querySelector('.payment-filters').addEventListener('click', event => {
     renderMonth();
 });
 setupStorageDialog();
-window.addEventListener('online', () => { if (SharedLedger.active) refreshRecords(); });
+window.addEventListener('online', refreshRecords);
 setInterval(() => {
-    if (SharedLedger.active && !document.hidden && !saving.size && !document.querySelector('dialog[open]')) refreshRecords();
+    if (!document.hidden && !saving.size && !document.querySelector('dialog[open]')) refreshRecords();
 }, 20000);
 selectMonth(month);
-async function initializeDatabase(preferredPerson = selectedPerson) {
-    try {
-        database = await openDatabase();
-        if (SharedLedger.active) {
-            if (preferredPerson) selectedPerson = preferredPerson;
-            await refreshRecords();
-            return;
-        }
-        const { profiles } = await readDeposits(selectedPerson);
-        people = profiles;
-        if (people.some(person => person.id === preferredPerson)) selectedPerson = preferredPerson;
-        else if (!people.some(person => person.id === selectedPerson)) rememberSelection(people[0].id);
-        await refreshRecords();
-    } catch {
-        if (SharedLedger.active) return refreshRecords();
-        setStorage('error', 'База недоступна');
-        message('Браузер не разрешил открыть локальную базу. Откройте калькулятор в обычном окне браузера.', true);
-    }
-}
-initializeDatabase(rememberedPerson);
+if (SharedLedger.available) {
+    if (rememberedPerson) selectedPerson = rememberedPerson;
+    refreshRecords();
+} else openHostedSite();
 
 if (window.isSecureContext && /^https?:$/.test(location.protocol) && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});

@@ -10,12 +10,12 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Дамбабанк">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="style.css?v=ledger-1">
+  <link rel="stylesheet" href="style.css?v=ledger-2">
   <script src="install.js" defer></script>
   <script src="schedule.js" defer></script>
-  <script src="ledger.js?v=1" defer></script>
-  <script src="shared.js?v=1" defer></script>
-  <script src="app.js?v=ledger-1" defer></script>
+  <script src="ledger.js?v=2" defer></script>
+  <script src="shared.js?v=2" defer></script>
+  <script src="app.js?v=ledger-2" defer></script>
   <title>Дамбабанк — счётчик выплат от мамы</title>
 </head>
 <body>
@@ -23,6 +23,12 @@
     <a class="brand" href="./index.html"><img src="icons/icon-192.png" width="40" height="40" alt="">Дамбабанк</a>
     <button type="button" class="storage-badge" id="storage-badge" data-state="loading" aria-haspopup="dialog" aria-label="Настройки базы данных"><span class="status-dot"></span><span id="storage-label">Открываю базу…</span><span aria-hidden="true">⌄</span></button>
   </header>
+  <section id="old-site" class="shell panel" hidden>
+    <h1>Дамбабанк</h1>
+    <p id="transfer-status" role="status">Открываем сайт с общей базой…</p>
+    <a class="install-button action-link" id="continue-cloud" href="https://dambabank.rustygeranium64.chatgpt.site/">Открыть Дамбабанк</a>
+    <button type="button" class="rename-button" id="legacy-export" hidden>Скачать прежние записи</button>
+  </section>
   <main class="shell">
     <div class="page-heading">
       <h1>Мои выплаты</h1>
@@ -119,16 +125,8 @@
   <footer class="shell site-footer"><span>Дамбабанк</span><button type="button" id="open-storage">Управление базой</button></footer>
   <dialog class="install-guide database-dialog" id="storage-dialog" aria-labelledby="database-title">
     <form method="dialog" class="dialog-heading"><h2 id="database-title">База данных</h2><button class="dialog-close" aria-label="Закрыть">×</button></form>
-    <p id="database-explanation"></p>
-    <div id="storage-static" hidden>
-      <a class="install-button action-link" href="https://dambabank.rustygeranium64.chatgpt.site/" target="_blank" rel="noopener">Открыть облачный Дамбабанк</a>
-      <p>Чтобы перенести текущие профили, скачайте копию. При первом подключении общей базы выберите этот файл.</p>
-    </div>
-    <div id="storage-server" hidden>
-      <button type="button" class="install-button" id="connect-database">Подключить общую базу</button>
-      <label class="rename-button import-label" id="import-label">Начать с файла копии<input type="file" id="import-book" accept=".json,application/json"></label>
-      <button type="button" class="rename-button" id="use-device" hidden>Открыть профили этого устройства</button>
-    </div>
+    <p>Профили и выплаты автоматически сохраняются в базе после входа. Для записи нужно соединение с сервером.</p>
+    <label class="rename-button import-label">Загрузить копию<input type="file" id="import-book" accept=".json,application/json"></label>
     <button type="button" class="rename-button" id="export-book">Скачать копию</button>
     <p id="database-message" class="message" role="status" hidden></p>
   </dialog>

@@ -4,16 +4,25 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const { once } = require('node:events');
 const { chromium } = require(process.env.DAMBABANK_PLAYWRIGHT_MODULE || 'playwright');
 
 test('adding, switching and removing people preserves other profiles and payments', { timeout: 90000 }, async t => {
     const port = process.env.DAMBABANK_TEST_PORT || '4072';
     const url = 'http://127.0.0.1:' + port + '/';
+    const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'dambabank-profiles-'));
     const server = spawn(process.execPath, [path.join(__dirname, 'server.cjs')], {
-        cwd: __dirname, env: { ...process.env, DAMBABANK_PORT: port }, windowsHide: true,
+        cwd: __dirname, env: { ...process.env, DAMBABANK_PORT: port, DAMBABANK_DB: path.join(folder, 'test.sqlite') }, windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
     });
-    t.after(() => server.kill());
+    t.after(async () => {
+        const stopped = once(server, 'exit');
+        server.kill();
+        await stopped;
+        await fs.rm(folder, { recursive: true, force: true });
+    });
     await new Promise((resolve, reject) => {
         server.on('error', reject);
         server.on('exit', code => reject(new Error('Preview server exited: ' + code)));
@@ -137,23 +146,14 @@ test('adding, switching and removing people preserves other profiles and payment
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     await context.setOffline(true);
     await page.reload();
+    await page.waitForSelector('#storage-badge[data-state=error]');
+    assert(await page.locator('#add-person').isDisabled());
+    await context.setOffline(false);
     await ready();
     await november();
-    await text('#month-saved', '500 ₽');
-    const sixth = await add('Добавлен без сети');
-    await text('#month-saved', '0 ₽');
-    await page.locator('[data-deposit="2026-11-02/monday"]').click();
-    await text('#month-saved', '500 ₽');
-    await page.reload();
-    await ready();
-    await november();
-    assert.equal(await page.locator('[data-person="' + sixth + '"]').getAttribute('aria-pressed'), 'true');
-    await text('#month-saved', '500 ₽');
-    await select('person-1');
     await text('#month-saved', '500 ₽');
     await select('person-2');
     await text('#month-saved', '1 000 ₽');
-
     await page.locator('#delete-person').click();
     await text('#delete-person-name', 'Второй');
     await page.locator('#cancel-delete-person').click();
@@ -161,21 +161,15 @@ test('adding, switching and removing people preserves other profiles and payment
     await removeSelected();
     assert.equal(await page.locator('[data-person="person-2"]').count(), 0);
     await text('#month-saved', '500 ₽');
-    assert.equal(await page.evaluate(() => new Promise(resolve => {
-        const request = database.transaction('deposits-person-2').objectStore('deposits-person-2').count();
-        request.onsuccess = () => resolve(request.result);
-    })), 0);
+    assert.equal(await page.evaluate(async () => (await SharedLedger.current()).book.people.some(p => p.id === 'person-2')), false);
 
     await select(third);
     await removeSelected();
     await other.locator('[data-person="' + third + '"]').waitFor({ state: 'detached' });
     assert.equal(await other.locator('[data-person="person-1"]').getAttribute('aria-pressed'), 'true');
-    assert.equal(await page.evaluate(id => new Promise(resolve => {
-        const request = database.transaction('deposits').objectStore('deposits').getAll();
-        request.onsuccess = () => resolve(request.result.some(entry => entry.personId === id || entry.profile?.id === id));
-    }), third), false);
+    assert.equal(await page.evaluate(async id => (await SharedLedger.current()).book.people.some(p => p.id === id), third), false);
 
-    for (const id of [fourth, fifth, sixth]) {
+    for (const id of [fourth, fifth]) {
         await select(id);
         await removeSelected();
     }

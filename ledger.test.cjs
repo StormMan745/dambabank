@@ -54,15 +54,18 @@ test('two devices share imported profiles, retain concurrent marks and survive r
     async function open(page) {
         await page.goto(url);
         await page.waitForFunction(() => !document.querySelector('#add-person').disabled);
-        await page.locator('#open-storage').click();
+        assert.equal(await page.locator('#storage-label').textContent(), 'Общая база');
     }
     const isShared = page => page.waitForFunction(() => document.getElementById('storage-label').textContent === 'Общая база' && !document.getElementById('storage-dialog').open);
     await open(phone);
     const backup = {format:'dambabank-1',book:{people:[{id:'person-1',name:'Семья',createdAt:0,marks:['2026-11-02/monday']}]}};
+    await phone.locator('#open-storage').click();
     await phone.locator('#import-book').setInputFiles({name:'family.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});
+    await phone.getByText('Записи из копии сохранены.').waitFor();
+    await phone.getByRole('button', { name: 'Закрыть', exact: true }).click();
     await isShared(phone);
     await open(pc);
-    await pc.locator('#connect-database').click();
+    assert.equal(await pc.locator('#connect-database, #use-device').count(), 0);
     await isShared(pc);
     for (const page of [phone,pc]) {
         await page.evaluate(() => selectMonth(SavingsSchedule.parseDate('2026-11-01')));
@@ -86,10 +89,14 @@ test('two devices share imported profiles, retain concurrent marks and survive r
     await phone.locator('#delete-person').click();
     await phone.locator('#confirm-delete-person').click();
     await phone.waitForFunction(() => !document.querySelector('#delete-person-dialog').open);
+    await pc.locator('#range-start').fill('2026-10-01');
+    await pc.locator('#range-start').dispatchEvent('change');
+    await pc.evaluate(() => rangeSave);
     await stop();
     server = await start();
     await pc.reload();
     await isShared(pc);
+    assert.equal(await pc.locator('#range-start').inputValue(), '2026-10-01');
     await pc.evaluate(() => selectMonth(SavingsSchedule.parseDate('2026-11-01')));
     assert.equal(await pc.locator('[data-person]').count(),1);
     assert.equal(await pc.locator('#month-saved').textContent(),'2 000 ₽');

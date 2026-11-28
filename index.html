@@ -10,20 +10,22 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Дамбабанк">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="style.css?v=remove-profile">
+  <link rel="stylesheet" href="style.css?v=ledger-1">
   <script src="install.js" defer></script>
   <script src="schedule.js" defer></script>
-  <script src="app.js?v=remove-profile" defer></script>
+  <script src="ledger.js?v=1" defer></script>
+  <script src="shared.js?v=1" defer></script>
+  <script src="app.js?v=ledger-1" defer></script>
   <title>Дамбабанк — счётчик выплат от мамы</title>
 </head>
 <body>
   <header class="site-header shell">
     <a class="brand" href="./index.html"><img src="icons/icon-192.png" width="40" height="40" alt="">Дамбабанк</a>
-    <span class="storage-badge" id="storage-badge" data-state="loading"><span class="status-dot"></span><span id="storage-label">Открываю базу…</span></span>
+    <button type="button" class="storage-badge" id="storage-badge" data-state="loading" aria-haspopup="dialog" aria-label="Настройки базы данных"><span class="status-dot"></span><span id="storage-label">Открываю базу…</span><span aria-hidden="true">⌄</span></button>
   </header>
   <main class="shell">
     <div class="page-heading">
-      <h1>Счётчик<br class="narrow-break"> выплат</h1>
+      <h1>Мои выплаты</h1>
       <div class="page-actions">
         <div class="month-navigation" role="group" aria-label="Выбор месяца">
         <button class="month-arrow" id="previous-month" type="button" aria-label="Предыдущий месяц">‹</button>
@@ -35,7 +37,7 @@
     </div>
     <section class="people-panel" aria-labelledby="people-title">
       <div class="people-heading">
-        <h2 id="people-title">Для кого считаем</h2>
+        <h2 id="people-title">Профили</h2>
         <div class="people-actions">
           <button class="rename-button" id="rename-person" type="button" disabled>Изменить имя</button>
           <button class="install-button" id="add-person" type="button" disabled>Добавить человека</button>
@@ -46,7 +48,7 @@
         <button class="person-button" type="button" data-person="person-1" aria-pressed="true" disabled>Человек 1</button>
         <button class="person-button" type="button" data-person="person-2" aria-pressed="false" disabled>Человек 2</button>
       </div>
-      <p class="people-note">У каждого свои отметки переводов и итоги. Выберите человека перед расчётом.</p>
+      
     </section>
     <div class="summary-grid">
       <section class="plan-card" aria-labelledby="plan-title">
@@ -71,8 +73,14 @@
           <h2 id="schedule-title">График выплат</h2>
           <p id="next-deposit"></p>
         </div>
+        <div class="payment-filters" role="group" aria-label="Фильтр выплат">
+          <button type="button" data-filter="all" aria-pressed="true">Все</button>
+          <button type="button" data-filter="pending" aria-pressed="false">Ожидаются</button>
+          <button type="button" data-filter="paid" aria-pressed="false">Переведены</button>
+        </div>
         <p class="message" id="save-message" role="status" hidden></p>
         <ul class="deposit-list" id="deposit-list"></ul>
+        <p class="empty-list" id="empty-list" role="status" hidden></p>
       </section>
       <div class="side">
         <section class="panel forecast-panel" aria-labelledby="forecast-title">
@@ -93,6 +101,7 @@
               <div><dt><span class="rule-dot monday-dot"></span>Понедельники</dt><dd id="range-mondays"></dd></div>
               <div><dt><span class="rule-dot thirteenth-dot"></span>13-е числа</dt><dd id="range-thirteenths"></dd></div>
               <div><dt>Переведено за период</dt><dd id="range-saved"></dd></div>
+              <div><dt>Осталось перевести</dt><dd id="range-left"></dd></div>
             </dl>
           </div>
         </section>
@@ -107,7 +116,22 @@
       </div>
     </div>
   </main>
-  <footer class="shell site-footer">Работает без интернета. Отметки сохраняются в этом браузере.</footer>
+  <footer class="shell site-footer"><span>Дамбабанк</span><button type="button" id="open-storage">Управление базой</button></footer>
+  <dialog class="install-guide database-dialog" id="storage-dialog" aria-labelledby="database-title">
+    <form method="dialog" class="dialog-heading"><h2 id="database-title">База данных</h2><button class="dialog-close" aria-label="Закрыть">×</button></form>
+    <p id="database-explanation"></p>
+    <div id="storage-static" hidden>
+      <a class="install-button action-link" href="https://dambabank.rustygeranium64.chatgpt.site/" target="_blank" rel="noopener">Открыть облачный Дамбабанк</a>
+      <p>Чтобы перенести текущие профили, скачайте копию. При первом подключении общей базы выберите этот файл.</p>
+    </div>
+    <div id="storage-server" hidden>
+      <button type="button" class="install-button" id="connect-database">Подключить общую базу</button>
+      <label class="rename-button import-label" id="import-label">Начать с файла копии<input type="file" id="import-book" accept=".json,application/json"></label>
+      <button type="button" class="rename-button" id="use-device" hidden>Открыть профили этого устройства</button>
+    </div>
+    <button type="button" class="rename-button" id="export-book">Скачать копию</button>
+    <p id="database-message" class="message" role="status" hidden></p>
+  </dialog>
   <dialog class="install-guide person-dialog" id="person-dialog" aria-labelledby="person-dialog-title">
     <form id="person-name-form">
       <h2 id="person-dialog-title">Изменить имя</h2>

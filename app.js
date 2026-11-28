@@ -22,6 +22,7 @@ try {
 } catch { /* Selection still works when browser storage preferences are restricted. */ }
 let database, ready = false, records = new Map(), readVersion = 0;
 const saving = new Set();
+let paymentFilter = 'all';
 const updates = (() => {
     try {
         return typeof BroadcastChannel === 'function' ? new BroadcastChannel('dambabank-deposits') : null;
@@ -37,6 +38,7 @@ function setStorage(state, label) {
 
 function message(text, error = false) {
     const box = byId('save-message');
+    delete box.dataset.source;
     box.hidden = !text;
     box.textContent = text;
     box.dataset.error = String(error);
@@ -119,6 +121,7 @@ function readDeposits(personId) {
 }
 
 function writeDeposit(personId, id, record) {
+    if (SharedLedger.active) return SharedLedger.change({ type: 'mark', id: personId, mark: id, marked: Boolean(record) });
     return new Promise((resolve, reject) => {
         const legacyStore = record ? null : legacyDepositStore(personId);
         const transaction = database.transaction(legacyStore ? ['deposits', legacyStore] : ['deposits'], 'readwrite');
@@ -139,12 +142,24 @@ function writeDeposit(personId, id, record) {
     });
 }
 
+async function readCurrent(personId) {
+    if (!SharedLedger.active) return readDeposits(personId);
+    const { book } = await SharedLedger.read();
+    if (!book || !DambaLedger.valid(book)) throw new Error('Общая база недоступна.');
+    const profile = book.people.find(person => person.id === personId);
+    const rows = (profile?.marks || []).map(id => {
+        const [date, rule] = id.split('/');
+        return { id, date, rule };
+    });
+    return { rows, profiles: book.people.map(({ marks, ...person }) => person) };
+}
+
 async function refreshRecords() {
-    if (!database) return;
+    if (!database && !SharedLedger.active) return;
     const version = ++readVersion;
     const personId = selectedPerson;
     try {
-        const { rows, profiles } = await readDeposits(personId);
+        const { rows, profiles } = await readCurrent(personId);
         if (version !== readVersion || personId !== selectedPerson) return;
         people = profiles;
         if (!people.some(person => person.id === personId)) {
@@ -156,12 +171,14 @@ async function refreshRecords() {
         }
         records = new Map(rows.filter(record => recordAmount(record) > 0).map(record => [record.id, record]));
         ready = true;
-        setStorage('ready', 'База на устройстве');
+        setStorage('ready', SharedLedger.active ? 'Общая база' : 'База на устройстве');
+        if (byId('save-message').dataset.source === 'read') message('');
     } catch {
         if (version !== readVersion) return;
         ready = false;
         setStorage('error', 'База недоступна');
-        message('Не удалось открыть отметки. Попробуйте открыть страницу в обычном окне браузера.', true);
+        message(SharedLedger.active ? 'Общая база недоступна. Проверьте соединение или откройте профили этого устройства в настройках базы.' : 'Не удалось открыть отметки. Попробуйте обычное окно браузера.', true);
+        byId('save-message').dataset.source = 'read';
     }
     renderMonth();
 }
@@ -182,10 +199,10 @@ function renderPeople() {
         }
         if (button.textContent !== person.name) button.textContent = person.name;
         button.setAttribute('aria-pressed', String(person.id === selectedPerson));
-        button.disabled = !database;
+        button.disabled = !database && !SharedLedger.active;
     }
     const person = people.find(item => item.id === selectedPerson);
-    byId('plan-title').textContent = 'Выплаты от мамы · ' + person.name;
+    byId('plan-title').textContent = 'План на месяц · ' + (person?.name || '…');
     byId('rename-person').disabled = !ready;
     byId('add-person').disabled = !ready;
     const remove = byId('delete-person');
@@ -219,11 +236,13 @@ async function savePersonName(event) {
         || [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16)).join('-'));
     const profile = { id: personId, name, createdAt: adding ? Date.now() : people.find(person => person.id === personId)?.createdAt || 0 };
     const button = byId('save-person-name');
-    if (button.disabled || !database) return;
+    if (button.disabled || (!database && !SharedLedger.active)) return;
     button.disabled = true;
     byId('person-name-error').hidden = true;
     try {
-        await new Promise((resolve, reject) => {
+        if (SharedLedger.active) {
+            await SharedLedger.change({ type: adding ? 'add' : 'rename', id: personId, profile, name });
+        } else await new Promise((resolve, reject) => {
             const transaction = database.transaction('deposits', 'readwrite');
             const store = transaction.objectStore('deposits');
             const deleted = store.get(deletedProfileKey(personId));
@@ -252,6 +271,7 @@ async function savePersonName(event) {
 }
 
 function deleteStoredPerson(personId) {
+    if (SharedLedger.active) return SharedLedger.change({ type: 'delete', id: personId });
     return new Promise((resolve, reject) => {
         const legacyStore = legacyDepositStore(personId);
         const hasLegacyPeople = database.objectStoreNames.contains('people');
@@ -305,7 +325,7 @@ async function deletePerson(event) {
     const button = byId('confirm-delete-person');
     const cancel = byId('cancel-delete-person');
     const error = byId('delete-person-error');
-    if (button.disabled || !personToDelete || !database) return;
+    if (button.disabled || !personToDelete || (!database && !SharedLedger.active)) return;
     button.disabled = true;
     cancel.disabled = true;
     error.hidden = true;
@@ -352,7 +372,9 @@ function renderForecast() {
     byId('range-total').textContent = money(forecast.total);
     byId('range-mondays').textContent = forecast.mondays + ' × 500 ₽';
     byId('range-thirteenths').textContent = forecast.thirteenths + ' × 1 000 ₽';
-    byId('range-saved').textContent = ready ? money(savedBetween(from, to)) : '—';
+    const saved = savedBetween(from, to);
+    byId('range-saved').textContent = ready ? money(saved) : '—';
+    byId('range-left').textContent = ready ? money(forecast.total - saved) : '—';
 }
 
 function element(tag, className, text) {
@@ -376,7 +398,7 @@ async function toggleDeposit(entry, date) {
         updates?.postMessage({ type: 'deposit', personId });
         if (personId === selectedPerson) await refreshRecords();
     } catch {
-        if (personId === selectedPerson) message('Не удалось сохранить отметку. Проверьте доступное место и попробуйте ещё раз.', true);
+        if (personId === selectedPerson) message(SharedLedger.active ? 'Не удалось сохранить отметку в общей базе. Проверьте соединение и повторите.' : 'Не удалось сохранить отметку. Проверьте доступное место и попробуйте ещё раз.', true);
     } finally {
         saving.delete(savingKey);
         renderMonth();
@@ -442,13 +464,18 @@ function renderMonth() {
         ? 'Все выплаты переведены' : 'Осталось перевести ' + money(planned.total - saved);
 
     const upcoming = days.find(day => day.date >= today && day.entries.some(entry => !records.has(entry.id)));
-    byId('next-deposit').textContent = upcoming && ready ? 'Ближайшая — ' + shortDate.format(parseDate(upcoming.date)) : '';
+    const nextAmount = upcoming?.entries.reduce((sum, entry) => sum + (records.has(entry.id) ? 0 : entry.amount), 0);
+    byId('next-deposit').textContent = upcoming && ready ? 'Ближайшая · ' + shortDate.format(parseDate(upcoming.date)) + ' · ' + money(nextAmount) : '';
     byId('previous-month').disabled = from === '1900-01-01';
     byId('next-month').disabled = to === '9999-12-31';
 
     const focused = document.activeElement?.dataset.deposit;
     const list = byId('deposit-list');
-    list.replaceChildren(...days.map(day => createDay(day, today)));
+    const visible = days.map(day => ({ ...day, entries: day.entries.filter(entry =>
+        paymentFilter === 'all' || (ready && records.has(entry.id) === (paymentFilter === 'paid'))) })).filter(day => day.entries.length);
+    list.replaceChildren(...visible.map(day => createDay(day, today)));
+    byId('empty-list').hidden = visible.length > 0 || !ready;
+    byId('empty-list').textContent = paymentFilter === 'paid' ? 'За этот месяц ещё нет отмеченных переводов.' : 'Все выплаты за месяц переведены.';
     if (focused) {
         [...list.querySelectorAll('button')].find(button => button.dataset.deposit === focused)?.focus({ preventScroll: true });
     }
@@ -506,16 +533,34 @@ updates?.addEventListener('message', event => {
 });
 window.addEventListener('focus', refreshRecords);
 
+document.querySelector('.payment-filters').addEventListener('click', event => {
+    const button = event.target.closest('[data-filter]');
+    if (!button) return;
+    paymentFilter = button.dataset.filter;
+    for (const item of document.querySelectorAll('[data-filter]')) item.setAttribute('aria-pressed', String(item === button));
+    renderMonth();
+});
+setupStorageDialog();
+window.addEventListener('online', () => { if (SharedLedger.active) refreshRecords(); });
+setInterval(() => {
+    if (SharedLedger.active && !document.hidden && !saving.size && !document.querySelector('dialog[open]')) refreshRecords();
+}, 20000);
 selectMonth(month);
 async function initializeDatabase(preferredPerson = selectedPerson) {
     try {
         database = await openDatabase();
+        if (SharedLedger.active) {
+            if (preferredPerson) selectedPerson = preferredPerson;
+            await refreshRecords();
+            return;
+        }
         const { profiles } = await readDeposits(selectedPerson);
         people = profiles;
         if (people.some(person => person.id === preferredPerson)) selectedPerson = preferredPerson;
         else if (!people.some(person => person.id === selectedPerson)) rememberSelection(people[0].id);
         await refreshRecords();
     } catch {
+        if (SharedLedger.active) return refreshRecords();
         setStorage('error', 'База недоступна');
         message('Браузер не разрешил открыть локальную базу. Откройте калькулятор в обычном окне браузера.', true);
     }

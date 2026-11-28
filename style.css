@@ -401,3 +401,45 @@ dl dd { font-size: 13px; font-weight: 700; flex: none; }
     .page-actions .month-current { min-width: 106px; }
     .page-actions .install-button { padding-inline: 9px; font-size: .8rem; }
 }
+
+/* The account switcher sits alongside the month summary on narrow screens. */
+.people-panel { padding: 16px 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
+.people-switcher { display: flex; flex-wrap: wrap; gap: 8px; }
+.person-button { min-height: 44px; border-radius: 12px; padding: 8px 16px; }
+.people-actions .rename-button { border-color: transparent; }
+.page-heading { align-items: center; }
+.plan-description { margin-top: 8px; }
+.plan-content { min-width: 0; max-width: 74%; overflow-wrap: anywhere; }
+.plan-art { z-index: -1; }
+.plan-card { background: linear-gradient(120deg, #123a32, #196148); }
+.payment-filters { display: flex; flex-wrap: wrap; gap: 3px; margin: 17px 0 6px; padding: 3px; border-radius: 12px; background: #edf2eb; width: fit-content; max-width: 100%; }
+.payment-filters button { border: 0; border-radius: 9px; background: transparent; color: #385148; min-height: 40px; padding: 6px 12px; font-size: .875rem; font-weight: 650; }
+.payment-filters button[aria-pressed="true"] { background: white; color: #174835; box-shadow: 0 1px 4px #17483530; }
+.empty-list { text-align: center; padding: 32px 8px; color: var(--muted); }
+.site-footer { display: flex; align-items: center; justify-content: space-between; font-size: .875rem; }
+.site-footer button { min-height: 44px; border: 0; padding: 0 4px; background: transparent; color: var(--green); text-decoration: underline; }
+.site-footer > span { font-weight: 700; }
+.database-dialog { padding: 24px; }
+.database-dialog .dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dialog-close { background: #edf2eb; color: var(--ink); min-width: 44px; min-height: 44px; border: 0; border-radius: 50%; font-size: 24px; }
+.database-dialog p { margin: 10px 0 16px; line-height: 1.5; }
+.database-dialog > button, .database-dialog #storage-server > *, .action-link { width: 100%; margin-top: 7px; text-align: center; }
+.action-link, .import-label { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; cursor: pointer; }
+.import-label { position: relative; }
+.import-label input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+.import-label:focus-within { outline: 3px solid #407e60; }
+@media (max-width: 540px) {
+  .shell { width: calc(100% - 24px); }
+  .site-header { min-height: 60px; gap: 6px; }
+  .page-heading { gap: 12px; margin: 18px 0 14px; }
+  .people-panel { padding: 12px; margin-bottom: 12px; }
+  .people-heading { display: contents; }
+  .people-panel { display: grid; gap: 8px; }
+  .people-switcher { grid-row: 2; }
+  .people-actions { gap: 2px 6px; }
+  .people-actions button, .people-actions .install-button { padding-inline: 8px; font-size: .8125rem; }
+  .payment-filters { width: 100%; }
+  .payment-filters button { flex: 1; padding: 6px; }
+  .database-dialog { padding: 16px; }
+  .storage-badge { padding: 8px; min-height: 44px; }
+}
